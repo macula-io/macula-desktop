@@ -25,3 +25,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"]
 [profile.release]
 strip = true
 lto = true
+
+# Keep dev builds lean: full debug info for ~500 transitive crates
+# (Tauri + WebKitGTK stack) makes target/ grow to gigabytes. Panics
+# still carry line numbers in release mode; dev backtraces lose them.
+[profile.dev]
+debug = 0
