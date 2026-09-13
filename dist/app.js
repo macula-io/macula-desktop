@@ -442,6 +442,36 @@ document.getElementById("autoreact-toggle").addEventListener("change", (e) => {
   invoke("set_chat_settings", { autoReact: e.target.checked });
 });
 
+// A gated tool the agent wants to run: the operator decides, in the
+// chat, before anything reaches the mesh. Matches lazymesh's asklist
+// discipline.
+listen("chat-approval", (e) => {
+  document.querySelector(".chat-empty")?.remove();
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant approval";
+  const args = truncate(String(e.payload.arguments || ""), 200);
+  wrap.innerHTML =
+    '<div class="role">approval required</div>' +
+    '<div class="bubble approval-note">' +
+    'The agent wants to run <span class="approval-tool">' + escapeHtml(e.payload.name) + "</span>" +
+    (args ? ' <span class="approval-args">' + escapeHtml(args) + "</span>" : "") +
+    '<div class="approval-actions">' +
+    '<button class="approve-btn ok" data-id="' + escapeHtml(e.payload.id) + '" data-approved="true">Approve</button>' +
+    '<button class="approve-btn deny" data-id="' + escapeHtml(e.payload.id) + '" data-approved="false">Deny</button>' +
+    "</div></div>";
+  chatLog.appendChild(wrap);
+  chatLog.scrollTop = chatLog.scrollHeight;
+});
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".approve-btn");
+  if (!btn) return;
+  invoke("approve_tool", { id: btn.dataset.id, approved: btn.dataset.approved === "true" });
+  const note = btn.closest(".approval-note");
+  note.querySelector(".approval-actions").innerHTML =
+    '<span class="approval-answered">' + (btn.dataset.approved === "true" ? "approved ✓" : "denied") + "</span>";
+});
+
 // --- titlebar window controls -------------------------------------------
 
 document.getElementById("win-min").addEventListener("click", () => invoke("window_minimize"));

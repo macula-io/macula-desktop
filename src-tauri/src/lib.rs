@@ -35,6 +35,7 @@ pub fn run() {
             chat::chat_send,
             chat::chat_settings,
             chat::set_chat_settings,
+            chat::approve_tool,
             apps::apps_config,
             apps::save_apps,
             apps::config_path_display,

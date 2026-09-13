@@ -53,6 +53,10 @@ pub struct ChatState {
     pub auto_react: std::sync::Mutex<bool>,
     /// in_flight: one turn at a time, user-driven or reactor-driven.
     pub in_flight: std::sync::Mutex<bool>,
+    /// pending_approvals: gated tool calls waiting on the operator's
+    /// answer, keyed by approval id.
+    pub pending_approvals:
+        std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
 }
 
 impl Default for ChatState {
@@ -61,7 +65,38 @@ impl Default for ChatState {
             history: std::sync::Mutex::new(Vec::new()),
             auto_react: std::sync::Mutex::new(false),
             in_flight: std::sync::Mutex::new(false),
+            pending_approvals: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+}
+
+/// GATED_TOOLS are the agent's write/act tools: they never run without
+/// the operator's per-call approval (the same discipline lazymesh's
+/// asklist applies). Reads and subscription management auto-run.
+static GATED_TOOLS: &[&str] = &["mesh_call", "mesh_publish", "content_put"];
+
+static APPROVAL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// approve_tool answers a pending tool approval from the webview:
+/// approved=true runs the tool, false (or a timeout) feeds the agent a
+/// denied result instead.
+#[tauri::command]
+pub fn approve_tool(
+    state: tauri::State<'_, ChatState>,
+    id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let sender = state
+        .pending_approvals
+        .lock()
+        .expect("chat approvals lock")
+        .remove(&id);
+    match sender {
+        Some(tx) => {
+            let _ = tx.send(approved);
+            Ok(())
+        }
+        None => Err("approval not found (already answered or expired)".to_string()),
     }
 }
 
@@ -309,7 +344,78 @@ async fn run_turn(
             tool_call_id: None,
         });
         for call in &tool_calls {
-            let result: Result<String, String> = match call.function.name.as_str() {
+            // The gate: write/act tools wait on the operator before
+            // anything reaches the mesh. Reads auto-run.
+            let gated = GATED_TOOLS.contains(&call.function.name.as_str());
+            let result: Result<String, String> = if gated {
+                match request_approval(app, call).await {
+                    Some(true) => execute_tool(app, link, call).await,
+                    Some(false) => Err("denied by the operator".to_string()),
+                    None => Err("approval timed out after 10 minutes".to_string()),
+                }
+            } else {
+                execute_tool(app, link, call).await
+            };
+            let content = match result {
+                Ok(ok) => ok,
+                Err(e) => format!("error: {e}"),
+            };
+            let _ = app.emit(
+                "chat-tool",
+                serde_json::json!({ "name": call.function.name, "result": content, "gated": gated }),
+            );
+            conversation.push(ChatMessage {
+                role: "tool".to_string(),
+                content,
+                tool_call_id: Some(call.id.clone()),
+                tool_calls: None,
+            });
+        }
+    }
+    Err("the model kept calling tools past the round cap".into())
+}
+
+/// request_approval asks the operator through the webview and waits:
+/// Some(true/false) when answered, None when the ten-minute window
+/// elapses.
+async fn request_approval(
+    app: &tauri::AppHandle,
+    call: &ToolCall,
+) -> Option<bool> {
+    let id = format!(
+        "approval-{}",
+        APPROVAL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.state::<ChatState>()
+        .pending_approvals
+        .lock()
+        .expect("chat approvals lock")
+        .insert(id.clone(), tx);
+    let _ = app.emit(
+        "chat-approval",
+        serde_json::json!({ "id": id, "name": call.function.name, "arguments": call.function.arguments }),
+    );
+    match tokio::time::timeout(std::time::Duration::from_secs(600), rx).await {
+        Ok(Ok(approved)) => Some(approved),
+        _ => {
+            app.state::<ChatState>()
+                .pending_approvals
+                .lock()
+                .expect("chat approvals lock")
+                .remove(&id);
+            None
+        }
+    }
+}
+
+/// execute_tool runs one tool call against the live mesh link.
+async fn execute_tool(
+    app: &tauri::AppHandle,
+    link: &crate::mesh::MeshLink,
+    call: &ToolCall,
+) -> Result<String, String> {
+    match call.function.name.as_str() {
                 "mesh_status" => serde_json::to_string(&link.snapshot())
                     .map_err(|e| format!("encode status: {e}")),
                 "mesh_call" => {
@@ -362,24 +468,7 @@ async fn run_turn(
                     link.request(crate::mesh::MeshCommand::ContentPut { data_b64, name }).await
                 }
                 other => Err(format!("unknown tool {other}")),
-            };
-            let content = match result {
-                Ok(ok) => ok,
-                Err(e) => format!("error: {e}"),
-            };
-            let _ = app.emit(
-                "chat-tool",
-                serde_json::json!({ "name": call.function.name, "result": content }),
-            );
-            conversation.push(ChatMessage {
-                role: "tool".to_string(),
-                content,
-                tool_call_id: Some(call.id.clone()),
-                tool_calls: None,
-            });
-        }
     }
-    Err("the model kept calling tools past the round cap".into())
 }
 
 async fn stream_chat(
