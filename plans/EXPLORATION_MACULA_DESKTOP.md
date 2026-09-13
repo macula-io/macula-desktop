@@ -102,6 +102,51 @@ process, its own surface, its own lifecycle.
   board, realms, services — is reachable through the SDK's existing
   surfaces; nothing about them is lazymesh-specific.
 
+## Applications: the desktop as the ecosystem's launcher
+
+Raf's model (2026-09-13): hecate services run on edge boxes in the
+operator's LAN and expose two faces — a mesh API to the fleet and a
+plain-HTTP admin UI to the LAN (hecate-tube's streaming API vs. its
+Admin API being the canonical example). A desktop on that same LAN can
+deep-link into both, so the sidebar gains an **Applications** section
+with two tabs:
+
+- **Local Applications** — LAN-hosted admin UIs, discovered via **mDNS**
+  (local discovery is already in the SDK's toolkit) or explicit config;
+  each entry is a name, description, and HTTP URL opened on click.
+- **Mesh Applications** — remotely hosted UIs, discovered via **DHT
+  `content_announcement` / `procedure_advertisement` records**; each
+  entry is an MRI or MCID resolved through the mesh.
+
+Mesh-hosted UIs are already the platform's own design, not an
+invention:
+
+- The **content system** is content-addressed: "location stops
+  mattering — any host holding the bytes serves the same MCID"
+  (`macula/docs/guides/content/CONTENT_GUIDE.md`). A static web UI is
+  content: build, `macula_feeder`, announce, `macula_download` with
+  integrity self-verified against the MCID.
+- **D27** (`PLAN_POST_QUANTUM_SECURITY.md`): the sharing node keeps and
+  serves content; stations pass it through.
+- **MRIs name it** (`mri:{type}:{realm}/path`) and the relay's surface
+  includes a **gateway** alongside content and registry; the transport
+  is HTTP/3, so even a plain browser can open a gateway URL.
+
+**Security carve-out (explicit, not accidental):** the main webview
+stays IPC-only and never touches the network. Application UIs are the
+deliberate exception, in one of two shapes:
+
+1. **v1: the system browser** — clicking an application opens the URL
+   in the operator's default browser. Zero added attack surface in the
+   desktop; the OS isolates the app's UI the way it isolates any other
+   site.
+2. **later: scoped secondary windows** — dedicated Tauri webviews whose
+   network access is restricted to the application's own origin, if the
+   all-in-one UX earns its complexity.
+
+Neither shape ever relaxes the main window's rule: no TCP ports, invoke
+only.
+
 ## What genuinely beats the TUI (unchanged from the terminal's limits)
 
 - Real markdown rendering (the webview's native job, not hand-rolled ANSI).
@@ -120,6 +165,14 @@ process, its own surface, its own lifecycle.
    loop (its own LLM calls through the SDK, no lazymesh involved)?
 3. **First window**: chat-over-rooms first, or the Teams board first
    (the feature a terminal renders worst)?
+4. **Applications first, or mesh features first?** The Applications
+   section is the quickest way to real value (LAN services already
+   exist); the mesh tabs need more SDK surface. Order is an operator
+   decision, not a technical one.
+5. **Local-app discovery**: mDNS announcements from hecate services, or
+   explicit config in the desktop for v1? (Recommendation: config first
+   — it works today with zero changes to the services; mDNS when the
+   services announce themselves.)
 
 ## What NOT to do
 
