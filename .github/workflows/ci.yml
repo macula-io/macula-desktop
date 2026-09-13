@@ -54,8 +54,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@nightly-2026-05-28
+      - uses: dtolnay/rust-toolchain@nightly
         with:
+          toolchain: nightly-2026-05-28
           components: rustc-dev,llvm-tools-preview
 
       - name: Install dylint tooling
