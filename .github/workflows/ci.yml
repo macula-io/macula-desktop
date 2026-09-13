@@ -64,11 +64,11 @@ jobs:
           curl -LsSf https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-x86_64-unknown-linux-gnu.tgz | tar xzf - -C ~/.cargo/bin
           cargo binstall -y cargo-dylint dylint-link
 
-      - name: Run the nesting-depth lint (warnings denied)
+      - name: Run the nesting-depth lint (deny level, fails the build)
         working-directory: linting
         run: |
           cargo build --locked
           cp target/debug/libmax_nesting_depth.so "target/debug/libmax_nesting_depth@nightly-2026-05-28-x86_64-unknown-linux-gnu.so"
           cargo dylint --manifest-path ../src-tauri/Cargo.toml \
             --lib-path "target/debug/libmax_nesting_depth@nightly-2026-05-28-x86_64-unknown-linux-gnu.so" \
-            --all -- -- -D warnings
+            --all

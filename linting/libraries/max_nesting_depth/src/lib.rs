@@ -44,7 +44,7 @@ dylint_linting::declare_late_lint! {
     /// }
     /// ```
     pub MAX_NESTING_DEPTH,
-    Warn,
+    Deny,
     "nesting deeper than the house maximum of two levels"
 }
 

@@ -1,4 +1,4 @@
-warning: nesting deeper than the house maximum of 2 levels (found depth 3)
+error: nesting deeper than the house maximum of 2 levels (found depth 3)
   --> $DIR/main.rs:7:13
    |
 LL | /             if c {
@@ -6,7 +6,7 @@ LL | |                 println!("three deep");
 LL | |             }
    | |_____________^
    |
-   = note: `#[warn(max_nesting_depth)]` on by default
+   = note: `#[deny(max_nesting_depth)]` on by default
 
-warning: 1 warning emitted
+error: aborting due to 1 previous error
 
