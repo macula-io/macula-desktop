@@ -466,9 +466,19 @@ listen("chat-done", () => {
   setTurning(false);
 });
 
-document.getElementById("autoreact-toggle").addEventListener("change", (e) => {
-  invoke("set_chat_settings", { autoReact: e.target.checked });
+document.getElementById("autoreact-toggle").addEventListener("change", () => {
+  syncChatSettings();
 });
+document.getElementById("memory-toggle").addEventListener("change", () => {
+  syncChatSettings();
+});
+
+function syncChatSettings() {
+  invoke("set_chat_settings", {
+    autoReact: document.getElementById("autoreact-toggle").checked,
+    memory: document.getElementById("memory-toggle").checked,
+  });
+}
 
 // A gated tool the agent wants to run: the operator decides, in the
 // chat, before anything reaches the mesh. Matches lazymesh's asklist
@@ -780,5 +790,6 @@ setInterval(refreshMesh, 2000);
 (async () => {
   const s = await invoke("chat_settings");
   document.getElementById("autoreact-toggle").checked = s.autoReact;
+  document.getElementById("memory-toggle").checked = s.memory;
 })();
 setInterval(tickUptime, 1000);

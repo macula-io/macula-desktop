@@ -60,6 +60,8 @@ pub struct ChatState {
     /// approve_all: every gated tool in the CURRENT turn auto-approves;
     /// reset when the turn starts.
     pub approve_all: std::sync::Mutex<bool>,
+    /// memory: recall/remember against hecate-rag (see Settings).
+    pub memory: std::sync::Mutex<bool>,
     /// interrupt: the operator asked to stop the current turn; the
     /// stream loop checks it between chunks.
     pub interrupt: std::sync::atomic::AtomicBool,
@@ -73,6 +75,7 @@ impl Default for ChatState {
             in_flight: std::sync::Mutex::new(false),
             pending_approvals: std::sync::Mutex::new(std::collections::HashMap::new()),
             approve_all: std::sync::Mutex::new(false),
+            memory: std::sync::Mutex::new(false),
             interrupt: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -132,6 +135,12 @@ pub fn chat_interrupt(state: tauri::State<'_, ChatState>) -> Result<(), String> 
 pub struct Settings {
     #[serde(default)]
     pub auto_react: bool,
+    /// memory: recall from hecate-rag at turn start and remember an
+    /// outcome summary at turn end. Opt-in: memory is shared and mesh
+    /// payloads are not end-to-end encrypted, so nothing is ever
+    /// written without the operator turning this on.
+    #[serde(default)]
+    pub memory: bool,
 }
 
 /// transcript_path is the append-only conversation log:
@@ -224,7 +233,10 @@ pub fn chat_settings() -> Settings {
     settings_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
-        .unwrap_or(Settings { auto_react: false })
+        .unwrap_or(Settings {
+            auto_react: false,
+            memory: false,
+        })
 }
 
 /// set_chat_settings persists the policy and applies it immediately:
@@ -233,15 +245,17 @@ pub fn chat_settings() -> Settings {
 pub fn set_chat_settings(
     state: tauri::State<'_, ChatState>,
     auto_react: bool,
+    memory: bool,
 ) -> Result<(), String> {
     *state.auto_react.lock().expect("chat policy lock") = auto_react;
+    *state.memory.lock().expect("chat policy lock") = memory;
     let Some(path) = settings_path() else {
         return Err("no config directory could be determined".to_string());
     };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create config directory: {e}"))?;
     }
-    let text = serde_json::to_string_pretty(&Settings { auto_react })
+    let text = serde_json::to_string_pretty(&Settings { auto_react, memory })
         .map_err(|e| format!("encode settings: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).map_err(|e| format!("write settings: {e}"))?;
@@ -289,18 +303,49 @@ fn run_user_turn(app: tauri::AppHandle) {
             .iter()
             .cloned()
             .collect();
-        let result = run_turn(&app, &link, history).await;
+        let memory_on = *state.memory.lock().expect("chat policy lock");
+        let memory_text = if memory_on {
+            let query = last_user_message(&history);
+            recall_memory(&link, &query).await
+        } else {
+            String::new()
+        };
+        let result = run_turn(&app, &link, history, memory_text).await;
         let _ = app.emit("chat-done", ());
-        record_answer(&state, result);
+        record_answer(&app, &state, result);
+        if memory_on {
+            let history: Vec<ChatMessage> = state
+                .history
+                .lock()
+                .expect("chat history lock")
+                .iter()
+                .cloned()
+                .collect();
+            if let Ok(summary) = summarize_turn(&history).await {
+                remember_turn(&link, &summary).await;
+            }
+        }
     });
 }
 
+/// last_user_message is the newest operator turn, the memory query.
+fn last_user_message(history: &[ChatMessage]) -> String {
+    history
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone())
+        .unwrap_or_default()
+}
+
 fn record_answer(
+    app: &tauri::AppHandle,
     state: &ChatState,
     result: Result<String, Box<dyn std::error::Error + Send + Sync>>,
 ) {
     let Ok(text) = result else {
-        return; // the error was already emitted from run_turn
+        let _ = app.emit("chat-error", "the turn failed -- see the console");
+        return;
     };
     if !text.is_empty() {
         append_transcript("assistant", &text);
@@ -363,9 +408,15 @@ pub fn maybe_react(app: &tauri::AppHandle) {
                 tool_calls: None,
                 tool_call_id: None,
             });
-            let result = run_turn(&app, &link, history).await;
+            let memory_text = if *state.memory.lock().expect("chat policy lock") {
+                let query = last_user_message(&history);
+                recall_memory(&link, &query).await
+            } else {
+                String::new()
+            };
+            let result = run_turn(&app, &link, history, memory_text).await;
             let _ = app.emit("chat-done", ());
-            record_answer(&state, result);
+            record_answer(&app, &state, result);
             *state.in_flight.lock().expect("chat inflight lock") = false;
         });
     });
@@ -375,7 +426,11 @@ pub fn maybe_react(app: &tauri::AppHandle) {
 /// mesh snapshot AND the captured event deliveries: the agent answers
 /// as the node it actually is, about the connection it actually has,
 /// with the events its subscriptions actually received.
-fn ground_messages(link: &crate::mesh::MeshLink, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+fn ground_messages(
+    link: &crate::mesh::MeshLink,
+    messages: Vec<ChatMessage>,
+    memory_text: String,
+) -> Vec<ChatMessage> {
     let status = link.snapshot();
     let identity = if status.identity_generated {
         status.node_id.clone()
@@ -406,11 +461,17 @@ fn ground_messages(link: &crate::mesh::MeshLink, messages: Vec<ChatMessage>) -> 
             lines.join("\n")
         )
     };
+    let memory_block = if memory_text.is_empty() {
+        String::new()
+    } else {
+        format!("Relevant memory recalled from the mesh (hecate-rag):\n{memory_text}\n")
+    };
     let system = format!(
         "You are the operator's personal agent inside macula-desktop, a desktop app for the Macula mesh. \
 The app's Rust core holds a live mesh connection, and you are grounded in it: \
 you are node {identity} dialing station {station}; the link is currently {connection}. \
 {events} \
+{memory_block}\
 When asked about your connection or the mesh, answer from THIS state, not from general knowledge: \
 you genuinely are this node on this mesh, through this app. \
 Use your mesh tools (call, publish, subscribe, unsubscribe, content get/put) to act on the mesh when the task needs it. \
@@ -422,6 +483,7 @@ Do not invent mesh facts beyond what you are given here; if asked for something 
         station = status.station,
         connection = connection,
         events = events_text,
+        memory_block = memory_block,
     );
     let mut grounded = Vec::with_capacity(messages.len() + 1);
     grounded.push(ChatMessage {
@@ -440,9 +502,10 @@ async fn run_turn(
     app: &tauri::AppHandle,
     link: &crate::mesh::MeshLink,
     messages: Vec<ChatMessage>,
+    memory_text: String,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     const MAX_ROUNDS: usize = 6;
-    let mut conversation = ground_messages(link, messages);
+    let mut conversation = ground_messages(link, messages, memory_text);
     let mut answer = String::new();
     for _round in 0..MAX_ROUNDS {
         let (text, tool_calls) = stream_chat(app, &conversation).await?;
@@ -781,6 +844,90 @@ static TOOLS: std::sync::LazyLock<Vec<serde_json::Value>> = std::sync::LazyLock:
         }),
     ]
 });
+
+/// recall_memory asks hecate-rag for anything relevant to the query.
+/// Best-effort: memory failures never break a turn, they just leave it
+/// ungrounded.
+async fn recall_memory(link: &crate::mesh::MeshLink, query: &str) -> String {
+    if query.is_empty() {
+        return String::new();
+    }
+    let args = serde_json::json!({ "query_text": query, "top_k": 5 }).to_string();
+    match link
+        .request(crate::mesh::MeshCommand::Call {
+            procedure: "answer_query".to_string(),
+            args_json: args,
+        })
+        .await
+    {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("memory recall failed: {e}");
+            String::new()
+        }
+    }
+}
+
+/// remember_turn deposits one summary into hecate-rag. Best-effort,
+/// like recall.
+async fn remember_turn(link: &crate::mesh::MeshLink, summary: &str) {
+    if summary.trim().is_empty() {
+        return;
+    }
+    let args =
+        serde_json::json!({ "content": summary, "source_label": "macula-desktop" }).to_string();
+    if let Err(e) = link
+        .request(crate::mesh::MeshCommand::Call {
+            procedure: "add_knowledge".to_string(),
+            args_json: args,
+        })
+        .await
+    {
+        eprintln!("memory remember failed: {e}");
+    }
+}
+
+/// summarize_turn distills the recent exchange into at most two
+/// sentences of first-person memory -- the shape hecate-rag is meant
+/// to hold, never a raw transcript.
+async fn summarize_turn(
+    history: &[ChatMessage],
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let (key, base_url, model) = llm_settings()?;
+    #[derive(Serialize)]
+    struct Request<'a> {
+        model: &'a str,
+        messages: Vec<ChatMessage>,
+        stream: bool,
+    }
+    let mut messages = vec![ChatMessage {
+        role: "system".to_string(),
+        content: "Summarize the exchange below into at most two sentences of first-person memory (\"I did X; the operator asked Y\"). Factual, short, no preamble.".to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+    messages.extend(history.iter().rev().take(6).rev().cloned());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
+    let response = client
+        .post(format!("{base_url}/chat/completions"))
+        .bearer_auth(key)
+        .json(&Request {
+            model: &model,
+            messages,
+            stream: false,
+        })
+        .send()
+        .await?
+        .error_for_status()?;
+    let body: serde_json::Value = response.json().await?;
+    Ok(body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string())
+}
 
 fn llm_settings() -> Result<(String, String, String), String> {
     let key = api_key_file()
