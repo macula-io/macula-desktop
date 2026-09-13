@@ -28,7 +28,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             mesh::mesh_status,
-            apps::local_apps,
+            apps::apps_config,
+            apps::save_apps,
             apps::config_path_display,
             apps::open_external,
             window_minimize,

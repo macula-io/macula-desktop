@@ -12,7 +12,7 @@ function selectTab(name) {
   document.querySelectorAll(".pane").forEach((p) => {
     p.classList.toggle("hidden", p.id !== `tab-${name}`);
   });
-  if (name === "apps-local") refreshLocalApps();
+  if (name === "apps-local" || name === "apps-mesh") refreshApps();
 }
 
 document.querySelectorAll(".tab").forEach((b) => {
@@ -41,6 +41,23 @@ document.addEventListener("keydown", (e) => {
 
 // --- Applications section ------------------------------------------------
 
+const APP_GLYPH =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/>' +
+  '<rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>';
+
+const MESH_GLYPH =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">' +
+  '<line x1="3" y1="5" x2="13" y2="5"/><line x1="3" y1="11" x2="13" y2="11"/>' +
+  '<line x1="6" y1="3" x2="6" y2="13"/><line x1="10" y1="3" x2="10" y2="13"/>' +
+  '<circle cx="3" cy="5" r="1.6"/><circle cx="13" cy="5" r="1.6"/>' +
+  '<circle cx="6" cy="11" r="1.6"/><circle cx="10" cy="11" r="1.6"/></svg>';
+
+const REMOVE_GLYPH =
+  '<svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2.5" y1="2.5" x2="9.5" y2="9.5"/><line x1="9.5" y1="2.5" x2="2.5" y2="9.5"/></svg>';
+
+let appsState = { local: [], mesh: [] };
+
 function openApps() {
   const shell = document.querySelector(".shell");
   const collapsed = shell.classList.contains("sidebar-collapsed");
@@ -57,7 +74,7 @@ function toggleApps() {
   const opening = sub.classList.contains("hidden");
   sub.classList.toggle("hidden", !opening);
   toggle.classList.toggle("open", opening);
-  if (opening) refreshLocalApps();
+  if (opening) refreshApps();
 }
 
 document.getElementById("apps-toggle").addEventListener("click", toggleApps);
@@ -68,44 +85,75 @@ document.getElementById("apps-toggle").addEventListener("keydown", (e) => {
   }
 });
 
-const APP_GLYPH =
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
-  '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/>' +
-  '<rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>';
+function emptyState(listEl, kind, path) {
+  listEl.innerHTML =
+    '<div class="empty">' +
+    '<div class="title">No ' + kind + ' applications yet</div>' +
+    '<div class="hint">Add your first one with the button below — entries persist to <span class="value">' +
+    escapeHtml(path) +
+    "</span>.</div></div>";
+}
 
-async function refreshLocalApps() {
-  const list = document.getElementById("app-list");
-  let apps;
-  try {
-    apps = await invoke("local_apps");
-  } catch (e) {
-    list.innerHTML = "";
-    return;
+function renderApps() {
+  const localList = document.getElementById("app-list-local");
+  const meshList = document.getElementById("app-list-mesh");
+
+  if (appsState.local.length === 0) {
+    configPathText().then((p) => emptyState(localList, "local", p));
+  } else {
+    localList.innerHTML = appsState.local
+      .map(
+        (a, i) =>
+          '<div class="app-card app-openable" data-url="' + escapeHtml(a.url) + '" data-name="' + escapeHtml(a.name) + '">' +
+          '<div class="app-glyph">' + APP_GLYPH + "</div>" +
+          '<div class="app-info">' +
+          '<div class="app-name">' + escapeHtml(a.name) + "</div>" +
+          '<div class="app-desc">' + escapeHtml(a.description || "") + "</div>" +
+          '<div class="app-url">' + escapeHtml(a.url) + "</div></div>" +
+          '<button class="open-btn" data-url="' + escapeHtml(a.url) + '">Open <span aria-hidden="true">↗</span></button>' +
+          '<button class="remove-btn" data-kind="local" data-index="' + i + '" title="Remove ' + escapeHtml(a.name) + '" aria-label="Remove ' + escapeHtml(a.name) + '">' + REMOVE_GLYPH + "</button>" +
+          "</div>"
+      )
+      .join("");
+    wireLocalCards(localList);
   }
-  if (!apps || apps.length === 0) {
-    const path = await invoke("config_path_display");
-    list.innerHTML =
-      '<div class="empty">' +
-      '<div class="title">No local applications yet</div>' +
-      '<div class="hint">Declare your LAN admin UIs in <span class="value">' +
-      escapeHtml(path) +
-      "</span> — a JSON file with a <span class=\"value\">local</span> array of " +
-      '<span class="value">{ name, description, url }</span> entries.</div></div>';
-    return;
+
+  if (appsState.mesh.length === 0) {
+    configPathText().then((p) => emptyState(meshList, "mesh", p));
+  } else {
+    meshList.innerHTML = appsState.mesh
+      .map(
+        (a, i) =>
+          '<div class="app-card">' +
+          '<div class="app-glyph">' + MESH_GLYPH + "</div>" +
+          '<div class="app-info">' +
+          '<div class="app-name">' + escapeHtml(a.name) + "</div>" +
+          '<div class="app-desc">' + escapeHtml(a.description || "") + "</div>" +
+          '<div class="app-url">' + escapeHtml(a.mri) + "</div></div>" +
+          '<span class="mesh-tag">resolves with the DHT slice</span>' +
+          '<button class="remove-btn" data-kind="mesh" data-index="' + i + '" title="Remove ' + escapeHtml(a.name) + '" aria-label="Remove ' + escapeHtml(a.name) + '">' + REMOVE_GLYPH + "</button>" +
+          "</div>"
+      )
+      .join("");
   }
-  list.innerHTML = apps
-    .map(
-      (a) =>
-        '<div class="app-card app-openable" data-url="' + escapeHtml(a.url) + '" data-name="' + escapeHtml(a.name) + '">' +
-        '<div class="app-glyph">' + APP_GLYPH + "</div>" +
-        '<div class="app-info">' +
-        '<div class="app-name">' + escapeHtml(a.name) + "</div>" +
-        '<div class="app-desc">' + escapeHtml(a.description || "") + "</div>" +
-        '<div class="app-url">' + escapeHtml(a.url) + "</div></div>" +
-        '<button class="open-btn" data-url="' + escapeHtml(a.url) + '">' +
-        "Open <span aria-hidden=\"true\">↗</span></button></div>"
-    )
-    .join("");
+
+  localList.querySelectorAll(".remove-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      appsState.local.splice(Number(btn.dataset.index), 1);
+      persistApps();
+    });
+  });
+  meshList.querySelectorAll(".remove-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      appsState.mesh.splice(Number(btn.dataset.index), 1);
+      persistApps();
+    });
+  });
+}
+
+function wireLocalCards(list) {
   list.querySelectorAll(".open-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -116,6 +164,89 @@ async function refreshLocalApps() {
     card.addEventListener("click", () => openEmbedded(card.dataset.name, card.dataset.url));
   });
 }
+
+async function persistApps() {
+  try {
+    await invoke("save_apps", { config: appsState });
+    renderApps();
+  } catch (e) {
+    // Re-render from the still-authoritative local state; the error is
+    // surfaced in the form if it came from there, or ignored for remove.
+    renderApps();
+  }
+}
+
+let configPathCache = null;
+async function configPathText() {
+  if (configPathCache) return configPathCache;
+  configPathCache = await invoke("config_path_display");
+  return configPathCache;
+}
+
+async function refreshApps() {
+  try {
+    appsState = await invoke("apps_config");
+  } catch (e) {
+    appsState = { local: [], mesh: [] };
+  }
+  configPathText().then((p) => {
+    const el = document.getElementById("apps-config-path");
+    if (el) el.textContent = p;
+  });
+  renderApps();
+}
+
+// --- add/remove forms -----------------------------------------------------
+
+function wireForm(kind) {
+  const btn = document.getElementById(`add-${kind}`);
+  const form = document.getElementById(`form-${kind}`);
+  const save = document.getElementById(`f-${kind}-save`);
+  const cancel = document.getElementById(`f-${kind}-cancel`);
+  const err = document.getElementById(`f-${kind}-err`);
+
+  btn.addEventListener("click", () => {
+    form.classList.remove("hidden");
+    btn.classList.add("hidden");
+    form.querySelector("input").focus();
+  });
+
+  cancel.addEventListener("click", () => {
+    form.classList.add("hidden");
+    btn.classList.remove("hidden");
+    err.classList.add("hidden");
+  });
+
+  save.addEventListener("click", async () => {
+    const name = document.getElementById(`f-${kind}-name`).value.trim();
+    const desc = document.getElementById(`f-${kind}-desc`).value.trim();
+    const key = kind === "local" ? "url" : "mri";
+    const value = document.getElementById(`f-${kind}-${key}`).value.trim();
+    const entry = kind === "local" ? { name, description: desc, url: value } : { name, description: desc, mri: value };
+    try {
+      const merged = { local: appsState.local, mesh: appsState.mesh };
+      merged[kind] = [...merged[kind], entry];
+      await invoke("save_apps", { config: merged });
+      appsState = merged;
+      renderApps();
+      form.classList.add("hidden");
+      btn.classList.remove("hidden");
+      err.classList.add("hidden");
+      ["name", "desc", key].forEach((f) => (document.getElementById(`f-${kind}-${f}`).value = ""));
+    } catch (e) {
+      err.textContent = String(e);
+      err.classList.remove("hidden");
+    }
+  });
+
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") save.click();
+    if (e.key === "Escape") cancel.click();
+  });
+}
+
+wireForm("local");
+wireForm("mesh");
 
 // --- embedded application view -------------------------------------------
 
@@ -295,5 +426,6 @@ document.getElementById("copy-node").addEventListener("click", async () => {
 });
 
 refreshMesh();
+refreshApps();
 setInterval(refreshMesh, 2000);
 setInterval(tickUptime, 1000);

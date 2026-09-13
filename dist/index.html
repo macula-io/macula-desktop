@@ -262,29 +262,47 @@
         <div class="pane-title"><h1>Local Applications</h1><span class="sub">admin UIs on your LAN</span></div>
         <p class="pane-desc">
           Hecate services running on your edge boxes expose plain-HTTP admin
-          UIs to the LAN.           Declare them in <span class="value" id="apps-config-path">the config file</span>
-          and they appear here; clicking one embeds its UI right here in the
-          content panel (the sidebar stays), with the system browser one click
-          away for anything that refuses to be embedded.
+          UIs to the LAN. Clicking a card embeds its UI right here (the
+          sidebar stays); the system browser is one click away. Add and
+          remove cards below — they persist to <span class="value" id="apps-config-path">the config file</span>.
         </p>
-        <div class="app-list" id="app-list"></div>
+        <div class="app-list" id="app-list-local"></div>
+        <button class="add-app-btn" id="add-local">
+          <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="6" y1="1.5" x2="6" y2="10.5"/><line x1="1.5" y1="6" x2="10.5" y2="6"/></svg>
+          Add application
+        </button>
+        <div class="app-form hidden" id="form-local">
+          <div class="form-row"><label>Name</label><input id="f-local-name" type="text" placeholder="Hecate Tube" /></div>
+          <div class="form-row"><label>Description</label><input id="f-local-desc" type="text" placeholder="YouTube over mesh, admin UI" /></div>
+          <div class="form-row"><label>URL</label><input id="f-local-url" type="text" placeholder="http://beam02.lab:8491" /></div>
+          <div class="form-actions">
+            <button class="toolbar-btn" id="f-local-save">Save</button>
+            <button class="toolbar-btn" id="f-local-cancel">Cancel</button>
+            <span class="form-error hidden" id="f-local-err"></span>
+          </div>
+        </div>
       </section>
 
       <section id="tab-apps-mesh" class="pane hidden">
         <div class="pane-title"><h1>Mesh Applications</h1><span class="sub">UIs served through the mesh</span></div>
-        <div class="empty">
-          <svg width="40" height="40" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round">
-            <line x1="3" y1="5" x2="13" y2="5"/><line x1="3" y1="11" x2="13" y2="11"/>
-            <line x1="6" y1="3" x2="6" y2="13"/><line x1="10" y1="3" x2="10" y2="13"/>
-            <circle cx="3" cy="5" r="1.6"/><circle cx="13" cy="5" r="1.6"/>
-            <circle cx="6" cy="11" r="1.6"/><circle cx="10" cy="11" r="1.6"/>
-          </svg>
-          <div class="title">No mesh applications yet</div>
-          <div class="hint">
-            UIs published as content on the mesh and discovered through DHT
-            content announcements — named by MRI, fetched with integrity
-            verified against their MCID. This tab lists them once the DHT
-            discovery slice lands.
+        <p class="pane-desc">
+          Applications hosted elsewhere on the mesh, named by MRI. Add the
+          ones you know; their resolution through the mesh lands with the
+          DHT-discovery slice — the card shows the MRI until then.
+        </p>
+        <div class="app-list" id="app-list-mesh"></div>
+        <button class="add-app-btn" id="add-mesh">
+          <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="6" y1="1.5" x2="6" y2="10.5"/><line x1="1.5" y1="6" x2="10.5" y2="6"/></svg>
+          Add application
+        </button>
+        <div class="app-form hidden" id="form-mesh">
+          <div class="form-row"><label>Name</label><input id="f-mesh-name" type="text" placeholder="Hecate Tube" /></div>
+          <div class="form-row"><label>Description</label><input id="f-mesh-desc" type="text" placeholder="YouTube over mesh" /></div>
+          <div class="form-row"><label>MRI</label><input id="f-mesh-mri" type="text" placeholder="mri:service:io.macula/tube" /></div>
+          <div class="form-actions">
+            <button class="toolbar-btn" id="f-mesh-save">Save</button>
+            <button class="toolbar-btn" id="f-mesh-cancel">Cancel</button>
+            <span class="form-error hidden" id="f-mesh-err"></span>
           </div>
         </div>
       </section>

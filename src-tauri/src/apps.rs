@@ -1,9 +1,9 @@
-//! Local applications: the LAN face of hecate services, configured by
-//! the operator in a small JSON file. The webview still never touches
-//! the network: clicking an application hands the URL to the OPERATING
-//! SYSTEM's browser through a registered command, and the main window
-//! keeps its IPC-only posture (see the exploration doc's security
-//! carve-out).
+//! Applications: the LAN and mesh faces of hecate services, declared
+//! and managed by the operator through the app itself. The webview
+//! still never touches the network: clicking a local application hands
+//! its URL to the OPERATING SYSTEM's browser (or embeds it, origin-
+//! isolated), and mesh applications resolve through the mesh once the
+//! DHT-discovery slice lands.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -18,13 +18,34 @@ pub struct LocalApp {
     pub url: String,
 }
 
-#[derive(Deserialize)]
+/// MeshApp is one mesh application entry: what it is and the MRI it
+/// will resolve through once mesh resolution ships.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeshApp {
+    pub name: String,
+    pub description: String,
+    pub mri: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AppsFile {
     #[serde(default)]
     local: Vec<LocalApp>,
+    #[serde(default)]
+    mesh: Vec<MeshApp>,
 }
 
-/// config_path is where the operator declares local applications:
+/// AppsConfig is what the webview reads and writes: both lists.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppsConfig {
+    pub local: Vec<LocalApp>,
+    pub mesh: Vec<MeshApp>,
+}
+
+/// config_path is where applications live:
 /// ~/.config/macula-desktop/apps.json on Linux/macOS,
 /// %LOCALAPPDATA%\macula-desktop\apps.json on Windows.
 fn config_path() -> Option<PathBuf> {
@@ -45,29 +66,71 @@ fn config_path() -> Option<PathBuf> {
     Some(path)
 }
 
-/// local_apps returns the configured LAN applications. A missing or
-/// unreadable config is an empty list, not an error -- the UI's empty
-/// state explains where the file lives.
-#[tauri::command]
-pub fn local_apps() -> Vec<LocalApp> {
-    let Some(path) = config_path() else {
-        return Vec::new();
-    };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
-    serde_json::from_str::<AppsFile>(&text)
-        .map(|f| f.local)
-        .unwrap_or_default()
-}
-
-/// config_path_display is the same path, stringified for the UI's
-/// empty state.
+/// config_path_display is the same path, stringified for the UI.
 #[tauri::command]
 pub fn config_path_display() -> String {
     config_path()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "apps.json".to_string())
+}
+
+/// apps_config returns the current configuration. A missing or
+/// unreadable file is an empty configuration, not an error -- the UI's
+/// empty state explains where the file lives.
+#[tauri::command]
+pub fn apps_config() -> AppsConfig {
+    let Some(path) = config_path() else {
+        return AppsConfig { local: Vec::new(), mesh: Vec::new() };
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return AppsConfig { local: Vec::new(), mesh: Vec::new() };
+    };
+    serde_json::from_str::<AppsFile>(&text)
+        .map(|f| AppsConfig { local: f.local, mesh: f.mesh })
+        .unwrap_or(AppsConfig { local: Vec::new(), mesh: Vec::new() })
+}
+
+/// save_apps persists the configuration, validating before writing:
+/// every local URL must be http(s), every mesh MRI must be an MRI, and
+/// names may not be empty. The write is atomic (temp file + rename) so
+/// a crash can never leave a half-written config.
+#[tauri::command]
+pub fn save_apps(config: AppsConfig) -> Result<(), String> {
+    for app in &config.local {
+        if app.name.trim().is_empty() {
+            return Err("a local application has an empty name".to_string());
+        }
+        let lower = app.url.to_ascii_lowercase();
+        if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+            return Err(format!("local application {}: URL must be http(s), got {}", app.name, app.url));
+        }
+    }
+    for app in &config.mesh {
+        if app.name.trim().is_empty() {
+            return Err("a mesh application has an empty name".to_string());
+        }
+        if !app.mri.starts_with("mri:") {
+            return Err(format!(
+                "mesh application {}: {} is not an MRI (expected mri:type:realm/path)",
+                app.name, app.mri
+            ));
+        }
+    }
+
+    let Some(path) = config_path() else {
+        return Err("no config directory could be determined".to_string());
+    };
+    let dir = path.parent().expect("config path has a parent");
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("create config directory {}: {e}", dir.display()))?;
+
+    let text = serde_json::to_string_pretty(&AppsFile { local: config.local, mesh: config.mesh })
+        .map_err(|e| format!("encode config: {e}"))?;
+
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("write config: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("commit config: {e}"))?;
+    Ok(())
 }
 
 /// open_external hands a URL to the operating system's default

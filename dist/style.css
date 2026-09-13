@@ -499,6 +499,95 @@ button.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .open-btn:hover { background: var(--accent-wash); }
 .open-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+.app-card .remove-btn {
+  appearance: none;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--faint);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+.app-card .remove-btn:hover { background: var(--bad-wash); color: var(--bad); }
+.app-card .remove-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.app-card .mesh-tag {
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--faint);
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+
+.add-app-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  color: var(--dim);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin-top: 12px;
+  font-family: var(--sans);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.add-app-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); }
+.add-app-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.app-form {
+  margin-top: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow);
+}
+
+.form-row { display: flex; flex-direction: column; gap: 5px; }
+
+.form-row label {
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.form-row input {
+  appearance: none;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-family: var(--sans);
+  font-size: 13.5px;
+}
+
+.form-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+
+.form-actions { display: flex; align-items: center; gap: 8px; }
+
+.form-error { color: var(--bad); font-size: 12.5px; }
+
 /* ---------- embedded application view ---------- */
 
 /* Hidden by default; the ID selector's display:flex must not beat the
