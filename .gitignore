@@ -1,2 +1,22 @@
+# Build artifacts
 /src-tauri/target/
 /src-tauri/gen/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors/IDEs
+.vscode/
+.idea/
+*.swp
+
+# Logs and local environment (never commit secrets)
+*.log
+.env
+.env.*
+
+# Frontend tooling, if/when the dist/ source gains a bundler
+node_modules/
+.vite/
