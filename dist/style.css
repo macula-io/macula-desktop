@@ -155,23 +155,18 @@ body {
 }
 
 /* Collapsed: icon rail. Labels, kbd hints and the station text hide;
-   the brand keeps its mark and the connection dot moves to the footer
-   alone. */
+   the connection dot stays alone in the footer, and the collapse
+   button centers at the top -- in normal flow, no absolute positioning
+   to lose. */
 .shell.sidebar-collapsed .sidebar { width: 56px; padding: 16px 8px; }
-.shell.sidebar-collapsed .brand-text,
 .shell.sidebar-collapsed .nav-label,
 .shell.sidebar-collapsed .tab-label,
 .shell.sidebar-collapsed .tab kbd,
 .shell.sidebar-collapsed .conn-text { display: none; }
 .shell.sidebar-collapsed .tab { justify-content: center; padding: 9px 0; }
-.shell.sidebar-collapsed .brand { justify-content: center; padding: 2px 0 18px; }
+.shell.sidebar-collapsed .sidebar-top { justify-content: center; }
 .shell.sidebar-collapsed .collapse-btn {
-  position: absolute;
-  right: auto;
-  top: auto;
-  bottom: 68px; /* above the connection dot, the rail's only other content */
-  left: 50%;
-  transform: translateX(-50%) rotate(180deg);
+  transform: rotate(180deg);
   background: var(--panel);
   border: 1px solid var(--border);
 }
@@ -179,43 +174,19 @@ body {
 .shell.sidebar-collapsed .sidebar-footer { justify-content: center; }
 .shell.sidebar-collapsed .sidebar-footer .dot { width: 10px; height: 10px; }
 
-.sidebar { position: relative; }
-
-.brand {
+.sidebar-top {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 2px 10px 18px;
-  position: relative;
-}
-
-.brand svg { flex-shrink: 0; }
-
-.brand-name {
-  font-family: var(--mono);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.3px;
-  color: var(--accent);
-}
-
-.brand-sub {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  font-weight: 500;
-  letter-spacing: 2.5px;
-  color: var(--orange);
-  margin-top: 1px;
+  justify-content: flex-end;
+  padding: 2px 4px 10px;
 }
 
 .collapse-btn {
   appearance: none;
   background: none;
-  border: none;
+  border: 1px solid transparent;
   color: var(--faint);
   width: 22px;
   height: 22px;
-  margin-left: auto;
   border-radius: 5px;
   display: flex;
   align-items: center;
