@@ -134,15 +134,19 @@ invention:
 
 **Security carve-out (explicit, not accidental):** the main webview
 stays IPC-only and never touches the network. Application UIs are the
-deliberate exception, in one of two shapes:
+deliberate exception, in three shapes:
 
-1. **v1: the system browser** — clicking an application opens the URL
-   in the operator's default browser. Zero added attack surface in the
-   desktop; the OS isolates the app's UI the way it isolates any other
-   site.
-2. **later: scoped secondary windows** — dedicated Tauri webviews whose
-   network access is restricted to the application's own origin, if the
-   all-in-one UX earns its complexity.
+1. **v1 (built 2026-09-13): embedded iframe in the content panel** —
+   the app's own JS never fetches anything; the embedded browsing
+   context is origin-isolated by the browser engine, the sidebar stays,
+   and the system browser is one toolbar click away for sites that
+   refuse to be framed.
+2. **system browser** — the per-app "Open in browser" button and the
+   `open_external` command (refuses anything non-http(s) before
+   spawning).
+3. **later, only if earned:** dedicated secondary Tauri windows scoped
+   to one origin — more complexity than the iframe for little extra
+   isolation, given the engine already isolates the frame by origin.
 
 Neither shape ever relaxes the main window's rule: no TCP ports, invoke
 only.
