@@ -25,6 +25,22 @@
   talk to it.
 - **No prior art.** hecate-web lives archived on GitHub; macula-desktop
   starts clean.
+- **Full keyboard capability** (2026-09-13): every action must be
+  reachable from the keyboard, not just the mouse. The terminal TUI
+  died partly from keyboard limits; the desktop must not regress — tabs,
+  focus traversal, message sending, approvals and table filtering all
+  get keys. This is a first-class requirement, not a nicety, so the
+  shell's keymap is designed alongside the mouse affordances from the
+  first slice onward.
+- **Cross-platform** (2026-09-13): the binary must run on Linux,
+  Windows and macOS. Tauri gives this natively (WebKitGTK / WebView2 /
+  WKWebView), but it is a real commitment: CI builds for all three
+  targets, and every platform-conditional in the Rust core is earned.
+- **Familiar installation** (2026-09-13): the well-known
+  `curl -fsSL https://…/install.sh | bash` shape for Linux and macOS,
+  with PowerShell equivalents for Windows — always paired with an
+  uninstaller of the same shape, checksum-verified downloads, and a
+  user-local install (no sudo) as the default.
 
 ## What this means architecturally
 
