@@ -90,7 +90,7 @@
 
   <!-- desktop badge: styled as a large hub node, matching the mesh's own
        vocabulary. Glyph is a window: title bar, frame, and one mesh node
-       inside -- a window onto the mesh. -->
+       inside — a window onto the mesh. -->
   <circle cx="54" cy="66" r="13" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="2"/>
   <g stroke="#0C1929" stroke-width="1.5" fill="none" stroke-linecap="round">
     <rect x="47" y="60" width="14" height="12" rx="2"/>
