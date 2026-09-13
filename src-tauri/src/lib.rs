@@ -14,6 +14,7 @@
 mod apps;
 mod chat;
 mod mesh;
+mod petname;
 
 use tauri::Manager;
 

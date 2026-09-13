@@ -425,7 +425,7 @@ listen("mesh-event", (e) => {
     '<div class="role">mesh · ' + escapeHtml(e.payload.topic) + "</div>" +
     '<div class="bubble event-note">' +
     escapeHtml(truncate(String(e.payload.payload), 300)) +
-    '<span class="event-publisher">' + escapeHtml(e.payload.publisher) + " · seq " + e.payload.seq + "</span></div>";
+    '<span class="event-publisher">' + escapeHtml(e.payload.publisher_petname || e.payload.publisher) + " · seq " + e.payload.seq + "</span></div>";
   chatLog.appendChild(wrap);
   chatLog.scrollTop = chatLog.scrollHeight;
 });
@@ -516,7 +516,8 @@ async function refreshMesh() {
 
     if (s.identityGenerated) {
       nodeId = s.nodeId;
-      document.getElementById("identity").textContent = nodeId;
+      const name = s.petname ? s.petname + " · " : "";
+      document.getElementById("identity").textContent = name + nodeId;
       document.getElementById("copy-node").disabled = false;
     }
 

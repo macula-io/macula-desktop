@@ -32,6 +32,9 @@ pub struct Status {
     pub station: String,
     pub identity_generated: bool,
     pub node_id: String,
+    /// The deterministic mesh-wide label for node_id, same derivation
+    /// as every other macula tool.
+    pub petname: String,
     pub connected: bool,
     pub error: Option<String>,
     /// Unix ms of the moment the link came up -- lets the UI show a
@@ -112,6 +115,7 @@ impl MeshLink {
             station: station.clone(),
             identity_generated: false,
             node_id: String::new(),
+            petname: String::new(),
             connected: false,
             error: None,
             connected_at_ms: None,
@@ -131,6 +135,7 @@ impl MeshLink {
                     let mut s = thread_status.lock().expect("mesh status lock");
                     s.identity_generated = true;
                     s.node_id = hex(&identity.node_id());
+                    s.petname = crate::petname::petname(&s.node_id);
                 }
                 let mut session = match connection::connect(&station, 4433, Trust::WebPki, &identity).await {
                     Ok(session) => {
@@ -209,6 +214,7 @@ impl MeshLink {
                                             "topic": event.topic,
                                             "payload": event.payload,
                                             "publisher": event.publisher,
+                                            "publisher_petname": crate::petname::petname(&event.publisher),
                                             "seq": event.seq,
                                         }),
                                     );
