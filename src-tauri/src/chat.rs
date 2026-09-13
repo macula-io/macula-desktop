@@ -23,14 +23,53 @@ pub struct ChatMessage {
 
 /// chat_send fires one completion request in the background: it returns
 /// immediately, then emits `chat-delta` events for every streamed
-/// fragment, `chat-error` on failure, and a final `chat-done`.
+/// fragment, `chat-error` on failure, and a final `chat-done`. The
+/// request is grounded in the app's live mesh state: a system message
+/// describes who this agent is (its node identity) and what it is
+/// connected to, built fresh at send time.
 #[tauri::command]
-pub fn chat_send(app: tauri::AppHandle, messages: Vec<ChatMessage>) -> Result<(), String> {
+pub fn chat_send(
+    app: tauri::AppHandle,
+    link: tauri::State<'_, crate::mesh::MeshLink>,
+    messages: Vec<ChatMessage>,
+) -> Result<(), String> {
     if messages.is_empty() {
         return Err("no messages to send".to_string());
     }
-    std::thread::spawn(move || run_chat(app, messages));
+    let grounded = ground_messages(&link.snapshot(), messages);
+    std::thread::spawn(move || run_chat(app, grounded));
     Ok(())
+}
+
+/// ground_messages prepends the system prompt derived from the live
+/// mesh snapshot: the agent answers AS the node it actually is, about
+/// the connection it actually has.
+fn ground_messages(status: &crate::mesh::Status, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let identity = if status.identity_generated {
+        status.node_id.clone()
+    } else {
+        "still generating".to_string()
+    };
+    let connection = if status.connected {
+        format!("connected, session held since {:?} ms after the Unix epoch", status.connected_at_ms)
+    } else {
+        "not connected".to_string()
+    };
+    let system = format!(
+        "You are the operator's personal agent inside macula-desktop, a desktop app for the Macula mesh. \
+The app's Rust core holds a live mesh connection, and you are grounded in it: \
+you are node {identity} dialing station {station}; the link is currently {connection}. \
+When asked about your connection or the mesh, answer from THIS state, not from general knowledge: \
+you genuinely are this node on this mesh, through this app. \
+Do not invent mesh facts beyond what you are given here; if asked for something you cannot know, say so.",
+        identity = identity,
+        station = status.station,
+        connection = connection,
+    );
+    let mut grounded = Vec::with_capacity(messages.len() + 1);
+    grounded.push(ChatMessage { role: "system".to_string(), content: system });
+    grounded.extend(messages);
+    grounded
 }
 
 fn run_chat(app: tauri::AppHandle, messages: Vec<ChatMessage>) {

@@ -40,6 +40,12 @@ pub struct MeshLink {
 }
 
 impl MeshLink {
+    /// snapshot is the current mesh state, shared with the chat module
+    /// so the agent can be grounded in the live link.
+    pub fn snapshot(&self) -> Status {
+        self.status.lock().expect("mesh status lock").clone()
+    }
+
     /// spawn starts the mesh thread: generate a puzzle-hardened
     /// identity, connect to the station, and hold the session.
     pub fn spawn(station: String) -> Self {
