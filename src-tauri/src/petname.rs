@@ -47,7 +47,8 @@ pub fn petname(node_id: &str) -> String {
     let a = ADJECTIVES_A[u16::from_be_bytes([digest[0], digest[1]]) as usize % ADJECTIVES_A.len()];
     let b = ADJECTIVES_B[u16::from_be_bytes([digest[2], digest[3]]) as usize % ADJECTIVES_B.len()];
     let n = NOUNS[u16::from_be_bytes([digest[4], digest[5]]) as usize % NOUNS.len()];
-    format!("{a}_{b}_{n}")
+    let suffix = u16::from_be_bytes([digest[6], digest[7]]) % 10_000;
+    format!("{a}_{b}_{n}_{suffix:04}")
 }
 
 #[cfg(test)]
@@ -60,6 +61,6 @@ mod tests {
         let first = petname(id);
         assert_eq!(petname(id), first);
         let parts: Vec<&str> = first.split('_').collect();
-        assert_eq!(parts.len(), 3, "adjective_adjective_noun");
+        assert_eq!(parts.len(), 4, "adjective_color_animal_suffix");
     }
 }
