@@ -40,3 +40,11 @@ jobs:
       - name: Build
         working-directory: src-tauri
         run: cargo build --locked
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Lint (clippy, warnings denied)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings

@@ -66,11 +66,13 @@ fn config_path() -> Option<PathBuf> {
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
             .filter(|v| !v.is_empty())
-            .or_else(|| std::env::var_os("HOME").map(|h| {
-                let mut p = PathBuf::from(&h);
-                p.push(".config");
-                p.into_os_string()
-            }))
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| {
+                    let mut p = PathBuf::from(&h);
+                    p.push(".config");
+                    p.into_os_string()
+                })
+            })
     }?;
     let mut path = PathBuf::from(dir);
     path.push("macula-desktop");
@@ -92,14 +94,26 @@ pub fn config_path_display() -> String {
 #[tauri::command]
 pub fn apps_config() -> AppsConfig {
     let Some(path) = config_path() else {
-        return AppsConfig { local: Vec::new(), mesh: Vec::new() };
+        return AppsConfig {
+            local: Vec::new(),
+            mesh: Vec::new(),
+        };
     };
     let Ok(text) = std::fs::read_to_string(&path) else {
-        return AppsConfig { local: Vec::new(), mesh: Vec::new() };
+        return AppsConfig {
+            local: Vec::new(),
+            mesh: Vec::new(),
+        };
     };
     serde_json::from_str::<AppsFile>(&text)
-        .map(|f| AppsConfig { local: f.local, mesh: f.mesh })
-        .unwrap_or(AppsConfig { local: Vec::new(), mesh: Vec::new() })
+        .map(|f| AppsConfig {
+            local: f.local,
+            mesh: f.mesh,
+        })
+        .unwrap_or(AppsConfig {
+            local: Vec::new(),
+            mesh: Vec::new(),
+        })
 }
 
 /// save_apps persists the configuration, validating before writing:
@@ -114,7 +128,10 @@ pub fn save_apps(config: AppsConfig) -> Result<(), String> {
         }
         let lower = app.url.to_ascii_lowercase();
         if !(lower.starts_with("https://") || lower.starts_with("http://")) {
-            return Err(format!("local application {}: URL must be http(s), got {}", app.name, app.url));
+            return Err(format!(
+                "local application {}: URL must be http(s), got {}",
+                app.name, app.url
+            ));
         }
     }
     for app in &config.mesh {
@@ -136,8 +153,11 @@ pub fn save_apps(config: AppsConfig) -> Result<(), String> {
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("create config directory {}: {e}", dir.display()))?;
 
-    let text = serde_json::to_string_pretty(&AppsFile { local: config.local, mesh: config.mesh })
-        .map_err(|e| format!("encode config: {e}"))?;
+    let text = serde_json::to_string_pretty(&AppsFile {
+        local: config.local,
+        mesh: config.mesh,
+    })
+    .map_err(|e| format!("encode config: {e}"))?;
 
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).map_err(|e| format!("write config: {e}"))?;
@@ -155,7 +175,9 @@ pub fn open_external(url: String) -> Result<(), String> {
         return Err(format!("refusing to open a non-http URL: {url}"));
     }
     let status = if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd").args(["/C", "start", "", &url]).status()
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .status()
     } else if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(&url).status()
     } else {

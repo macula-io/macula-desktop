@@ -114,11 +114,13 @@ fn settings_path() -> Option<PathBuf> {
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
             .filter(|v| !v.is_empty())
-            .or_else(|| std::env::var_os("HOME").map(|h| {
-                let mut p = PathBuf::from(&h);
-                p.push(".config");
-                p.into_os_string()
-            }))
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| {
+                    let mut p = PathBuf::from(&h);
+                    p.push(".config");
+                    p.into_os_string()
+                })
+            })
     }?;
     let mut path = PathBuf::from(dir);
     path.push("macula-desktop");
@@ -173,7 +175,12 @@ pub fn chat_send(
         .history
         .lock()
         .expect("chat history lock")
-        .push(ChatMessage { role: "user".to_string(), content, tool_calls: None, tool_call_id: None });
+        .push(ChatMessage {
+            role: "user".to_string(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+        });
     std::thread::spawn(move || run_user_turn(app));
     Ok(())
 }
@@ -198,19 +205,24 @@ fn run_user_turn(app: tauri::AppHandle) {
     });
 }
 
-fn record_answer(state: &ChatState, result: Result<String, Box<dyn std::error::Error + Send + Sync>>) {
-    match result {
-        Ok(text) => {
-            if !text.is_empty() {
-                state.history.lock().expect("chat history lock").push(ChatMessage {
-                    role: "assistant".to_string(),
-                    content: text,
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
-            }
-        }
-        Err(_) => {} // the error was already emitted from run_turn
+fn record_answer(
+    state: &ChatState,
+    result: Result<String, Box<dyn std::error::Error + Send + Sync>>,
+) {
+    let Ok(text) = result else {
+        return; // the error was already emitted from run_turn
+    };
+    if !text.is_empty() {
+        state
+            .history
+            .lock()
+            .expect("chat history lock")
+            .push(ChatMessage {
+                role: "assistant".to_string(),
+                content: text,
+                tool_calls: None,
+                tool_call_id: None,
+            });
     }
 }
 
@@ -262,10 +274,7 @@ pub fn maybe_react(app: &tauri::AppHandle) {
 /// mesh snapshot AND the captured event deliveries: the agent answers
 /// as the node it actually is, about the connection it actually has,
 /// with the events its subscriptions actually received.
-fn ground_messages(
-    link: &crate::mesh::MeshLink,
-    messages: Vec<ChatMessage>,
-) -> Vec<ChatMessage> {
+fn ground_messages(link: &crate::mesh::MeshLink, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     let status = link.snapshot();
     let identity = if status.identity_generated {
         status.node_id.clone()
@@ -273,7 +282,10 @@ fn ground_messages(
         "still generating".to_string()
     };
     let connection = if status.connected {
-        format!("connected, session held since {:?} ms after the Unix epoch", status.connected_at_ms)
+        format!(
+            "connected, session held since {:?} ms after the Unix epoch",
+            status.connected_at_ms
+        )
     } else {
         "not connected".to_string()
     };
@@ -378,10 +390,7 @@ async fn run_turn(
 /// request_approval asks the operator through the webview and waits:
 /// Some(true/false) when answered, None when the ten-minute window
 /// elapses.
-async fn request_approval(
-    app: &tauri::AppHandle,
-    call: &ToolCall,
-) -> Option<bool> {
+async fn request_approval(app: &tauri::AppHandle, call: &ToolCall) -> Option<bool> {
     let id = format!(
         "approval-{}",
         APPROVAL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -410,63 +419,73 @@ async fn request_approval(
 }
 
 /// execute_tool runs one tool call against the live mesh link.
-async fn execute_tool(
-    link: &crate::mesh::MeshLink,
-    call: &ToolCall,
-) -> Result<String, String> {
+async fn execute_tool(link: &crate::mesh::MeshLink, call: &ToolCall) -> Result<String, String> {
     match call.function.name.as_str() {
-                "mesh_status" => serde_json::to_string(&link.snapshot())
-                    .map_err(|e| format!("encode status: {e}")),
-                "mesh_call" => {
-                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                        .map_err(|e| format!("bad arguments: {e}"))?;
-                    let procedure = args["procedure"].as_str().unwrap_or("").to_string();
-                    let args_json = args["args_json"].as_str().unwrap_or("").to_string();
-                    if procedure.is_empty() {
-                        Err("mesh_call requires a procedure".to_string())
-                    } else {
-                        link.request(crate::mesh::MeshCommand::Call { procedure, args_json }).await
-                    }
-                }
-                "mesh_publish" => {
-                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                        .map_err(|e| format!("bad arguments: {e}"))?;
-                    let topic = args["topic"].as_str().unwrap_or("").to_string();
-                    let payload_json = args["payload_json"].as_str().unwrap_or("").to_string();
-                    link.request(crate::mesh::MeshCommand::Publish { topic, payload_json }).await
-                }
-                "mesh_subscribe" => {
-                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                        .map_err(|e| format!("bad arguments: {e}"))?;
-                    let topic = args["topic"].as_str().unwrap_or("").to_string();
-                    link.request(crate::mesh::MeshCommand::Subscribe { topic }).await
-                }
-                "mesh_unsubscribe" => {
-                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                        .map_err(|e| format!("bad arguments: {e}"))?;
-                    let topic = args["topic"].as_str().unwrap_or("").to_string();
-                    link.request(crate::mesh::MeshCommand::Unsubscribe { topic }).await
-                }
-                "content_get" => {
-                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                        .map_err(|e| format!("bad arguments: {e}"))?;
-                    let mcid_hex = args["mcid"].as_str().unwrap_or("").to_string();
-                    if mcid_hex.is_empty() {
-                        Err("content_get requires an mcid".to_string())
-                    } else {
-                        link.request(crate::mesh::MeshCommand::ContentGet { mcid_hex }).await
-                    }
-                }
-                "content_put" => {
-                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                        .map_err(|e| format!("bad arguments: {e}"))?;
-                    let data = args["data"].as_str().unwrap_or("").to_string();
-                    let name = args["name"].as_str().unwrap_or("").to_string();
-                    use base64::Engine;
-                    let data_b64 = base64::engine::general_purpose::STANDARD.encode(data.as_bytes());
-                    link.request(crate::mesh::MeshCommand::ContentPut { data_b64, name }).await
-                }
-                other => Err(format!("unknown tool {other}")),
+        "mesh_status" => {
+            serde_json::to_string(&link.snapshot()).map_err(|e| format!("encode status: {e}"))
+        }
+        "mesh_call" => {
+            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                .map_err(|e| format!("bad arguments: {e}"))?;
+            let procedure = args["procedure"].as_str().unwrap_or("").to_string();
+            let args_json = args["args_json"].as_str().unwrap_or("").to_string();
+            if procedure.is_empty() {
+                Err("mesh_call requires a procedure".to_string())
+            } else {
+                link.request(crate::mesh::MeshCommand::Call {
+                    procedure,
+                    args_json,
+                })
+                .await
+            }
+        }
+        "mesh_publish" => {
+            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                .map_err(|e| format!("bad arguments: {e}"))?;
+            let topic = args["topic"].as_str().unwrap_or("").to_string();
+            let payload_json = args["payload_json"].as_str().unwrap_or("").to_string();
+            link.request(crate::mesh::MeshCommand::Publish {
+                topic,
+                payload_json,
+            })
+            .await
+        }
+        "mesh_subscribe" => {
+            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                .map_err(|e| format!("bad arguments: {e}"))?;
+            let topic = args["topic"].as_str().unwrap_or("").to_string();
+            link.request(crate::mesh::MeshCommand::Subscribe { topic })
+                .await
+        }
+        "mesh_unsubscribe" => {
+            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                .map_err(|e| format!("bad arguments: {e}"))?;
+            let topic = args["topic"].as_str().unwrap_or("").to_string();
+            link.request(crate::mesh::MeshCommand::Unsubscribe { topic })
+                .await
+        }
+        "content_get" => {
+            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                .map_err(|e| format!("bad arguments: {e}"))?;
+            let mcid_hex = args["mcid"].as_str().unwrap_or("").to_string();
+            if mcid_hex.is_empty() {
+                Err("content_get requires an mcid".to_string())
+            } else {
+                link.request(crate::mesh::MeshCommand::ContentGet { mcid_hex })
+                    .await
+            }
+        }
+        "content_put" => {
+            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                .map_err(|e| format!("bad arguments: {e}"))?;
+            let data = args["data"].as_str().unwrap_or("").to_string();
+            let name = args["name"].as_str().unwrap_or("").to_string();
+            use base64::Engine;
+            let data_b64 = base64::engine::general_purpose::STANDARD.encode(data.as_bytes());
+            link.request(crate::mesh::MeshCommand::ContentPut { data_b64, name })
+                .await
+        }
+        other => Err(format!("unknown tool {other}")),
     }
 }
 
@@ -490,7 +509,12 @@ async fn stream_chat(
     let response = client
         .post(format!("{base_url}/chat/completions"))
         .bearer_auth(key)
-        .json(&Request { model: &model, messages, stream: true, tools: &TOOLS })
+        .json(&Request {
+            model: &model,
+            messages,
+            stream: true,
+            tools: &TOOLS,
+        })
         .send()
         .await?
         .error_for_status()?;
@@ -524,7 +548,10 @@ async fn stream_chat(
                                 tool_calls.push(ToolCall {
                                     id: String::new(),
                                     kind: "function".to_string(),
-                                    function: ToolCallFunction { name: String::new(), arguments: String::new() },
+                                    function: ToolCallFunction {
+                                        name: String::new(),
+                                        arguments: String::new(),
+                                    },
                                 });
                             }
                             let tc = &mut tool_calls[index];

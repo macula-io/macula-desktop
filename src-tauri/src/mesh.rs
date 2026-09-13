@@ -99,7 +99,10 @@ pub struct JoinedRoom {
 /// thread: the thread owns the Session, commands travel over a channel.
 pub enum MeshCommand {
     /// Call a procedure on the mesh, JSON args in, JSON result out.
-    Call { procedure: String, args_json: String },
+    Call {
+        procedure: String,
+        args_json: String,
+    },
     /// Publish a fact to a topic (realm = the zero realm).
     Publish { topic: String, payload_json: String },
     /// Subscribe to a topic; deliveries arrive as MeshEvents.
@@ -149,7 +152,12 @@ impl MeshLink {
 
     /// recent_events returns the captured deliveries, oldest first.
     pub fn recent_events(&self) -> Vec<MeshEvent> {
-        self.events.lock().expect("mesh events lock").iter().cloned().collect()
+        self.events
+            .lock()
+            .expect("mesh events lock")
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// roster returns the presence list, most recently seen first, with
@@ -172,7 +180,7 @@ impl MeshLink {
                 e
             })
             .collect();
-        entries.sort_by(|a, b| b.last_seen_ms.cmp(&a.last_seen_ms));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.last_seen_ms));
         entries
     }
 
@@ -186,7 +194,7 @@ impl MeshLink {
             .values()
             .cloned()
             .collect();
-        rooms.sort_by(|a, b| b.seen_at_ms.cmp(&a.seen_at_ms));
+        rooms.sort_by_key(|r| std::cmp::Reverse(r.seen_at_ms));
         rooms
     }
 
@@ -225,7 +233,8 @@ impl MeshLink {
             error: None,
             connected_at_ms: None,
         }));
-        let (tx, mut rx) = mpsc::channel::<(MeshCommand, oneshot::Sender<Result<String, String>>)>(16);
+        let (tx, mut rx) =
+            mpsc::channel::<(MeshCommand, oneshot::Sender<Result<String, String>>)>(16);
         let thread_status = status.clone();
         let events: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>> =
             std::sync::Arc::new(Mutex::new(std::collections::VecDeque::new()));
@@ -240,7 +249,8 @@ impl MeshLink {
             std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
         let thread_joined_rooms = joined_rooms.clone();
         std::thread::spawn(move || {
-            let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime for the mesh link");
+            let runtime =
+                tokio::runtime::Runtime::new().expect("build tokio runtime for the mesh link");
             runtime.block_on(async move {
                 // Puzzle-hardened identities are required: an unhardened
                 // one fails the handshake silently (HELLO never accepts).
@@ -353,7 +363,14 @@ impl MeshLink {
                 }
             });
         });
-        MeshLink { status, tx, events, roster, public_rooms, joined_rooms }
+        MeshLink {
+            status,
+            tx,
+            events,
+            roster,
+            public_rooms,
+            joined_rooms,
+        }
     }
 }
 
@@ -370,11 +387,15 @@ async fn join_room_command(
         .subscribe(&spec, identity)
         .await
         .map_err(|e| format!("join failed: {e}"))?;
-    joined.lock().expect("joined rooms lock").entry(topic.to_string()).or_insert(JoinedRoom {
-        topic: topic.to_string(),
-        purpose: purpose.to_string(),
-        messages: Vec::new(),
-    });
+    joined
+        .lock()
+        .expect("joined rooms lock")
+        .entry(topic.to_string())
+        .or_insert(JoinedRoom {
+            topic: topic.to_string(),
+            purpose: purpose.to_string(),
+            messages: Vec::new(),
+        });
     Ok(format!("joined room {topic}"))
 }
 
@@ -645,7 +666,7 @@ async fn mesh_content_get(
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("hex string must have even length".to_string());
     }
     (0..s.len())
@@ -671,11 +692,19 @@ async fn mesh_call(
         .map(|d| d.as_millis() as i128 + 30_000)
         .unwrap_or(30_000);
     match session
-        .call(procedure, [0u8; 32], payload, deadline, identity, Duration::from_secs(30))
+        .call(
+            procedure,
+            [0u8; 32],
+            payload,
+            deadline,
+            identity,
+            Duration::from_secs(30),
+        )
         .await
     {
-        Ok(CallResponse::Result { payload, .. }) => cbor_to_json(&payload)
-            .map_err(|e| format!("decode result: {e}")),
+        Ok(CallResponse::Result { payload, .. }) => {
+            cbor_to_json(&payload).map_err(|e| format!("decode result: {e}"))
+        }
         Ok(CallResponse::Error { name, detail, .. }) => {
             Err(format!("{name}: {}", detail.unwrap_or_default()))
         }
@@ -724,9 +753,9 @@ fn cbor_to_json(v: &Value) -> Result<String, String> {
                 .map(serde_json::Value::Number)
                 .ok_or_else(|| "non-finite float".to_string())?,
             Value::Text(s) => serde_json::Value::String(s.clone()),
-            Value::Bytes(b) => serde_json::Value::String(
-                b.iter().map(|x| format!("{x:02x}")).collect(),
-            ),
+            Value::Bytes(b) => {
+                serde_json::Value::String(b.iter().map(|x| format!("{x:02x}")).collect())
+            }
             Value::List(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
@@ -784,16 +813,17 @@ pub async fn join_room(
     topic: String,
     purpose: String,
 ) -> Result<(), String> {
-    link.request(MeshCommand::JoinRoom { topic, purpose }).await.map(|_| ())
+    link.request(MeshCommand::JoinRoom { topic, purpose })
+        .await
+        .map(|_| ())
 }
 
 /// leave_room unsubscribes and drops local tracking.
 #[tauri::command]
-pub async fn leave_room(
-    link: tauri::State<'_, MeshLink>,
-    topic: String,
-) -> Result<(), String> {
-    link.request(MeshCommand::LeaveRoom { topic }).await.map(|_| ())
+pub async fn leave_room(link: tauri::State<'_, MeshLink>, topic: String) -> Result<(), String> {
+    link.request(MeshCommand::LeaveRoom { topic })
+        .await
+        .map(|_| ())
 }
 
 fn hex(bytes: &[u8; 32]) -> String {
