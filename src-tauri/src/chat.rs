@@ -58,15 +58,20 @@ pub fn chat_send(
     if messages.is_empty() {
         return Err("no messages to send".to_string());
     }
-    let grounded = ground_messages(&link.snapshot(), messages);
+    let grounded = ground_messages(&link, messages);
     std::thread::spawn(move || run_chat(app, grounded));
     Ok(())
 }
 
 /// ground_messages prepends the system prompt derived from the live
-/// mesh snapshot: the agent answers AS the node it actually is, about
-/// the connection it actually has.
-fn ground_messages(status: &crate::mesh::Status, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+/// mesh snapshot AND the captured event deliveries: the agent answers
+/// as the node it actually is, about the connection it actually has,
+/// with the events its subscriptions actually received.
+fn ground_messages(
+    link: &crate::mesh::MeshLink,
+    messages: Vec<ChatMessage>,
+) -> Vec<ChatMessage> {
+    let status = link.snapshot();
     let identity = if status.identity_generated {
         status.node_id.clone()
     } else {
@@ -77,16 +82,35 @@ fn ground_messages(status: &crate::mesh::Status, messages: Vec<ChatMessage>) -> 
     } else {
         "not connected".to_string()
     };
+    let events = link.recent_events();
+    let events_text = if events.is_empty() {
+        "You have not received any subscribed events yet.".to_string()
+    } else {
+        let mut lines: Vec<String> = Vec::with_capacity(events.len());
+        for e in events.iter().rev().take(20).rev() {
+            lines.push(format!(
+                "- topic {} from {} (seq {}): {}",
+                e.topic, e.publisher, e.seq, e.payload
+            ));
+        }
+        format!(
+            "Deliveries your subscriptions have received (oldest last):\n{}",
+            lines.join("\n")
+        )
+    };
     let system = format!(
         "You are the operator's personal agent inside macula-desktop, a desktop app for the Macula mesh. \
 The app's Rust core holds a live mesh connection, and you are grounded in it: \
 you are node {identity} dialing station {station}; the link is currently {connection}. \
+{events} \
 When asked about your connection or the mesh, answer from THIS state, not from general knowledge: \
 you genuinely are this node on this mesh, through this app. \
+Use your mesh tools (call, publish, subscribe, unsubscribe, content get/put) to act on the mesh when the task needs it. \
 Do not invent mesh facts beyond what you are given here; if asked for something you cannot know, say so.",
         identity = identity,
         station = status.station,
         connection = connection,
+        events = events_text,
     );
     let mut grounded = Vec::with_capacity(messages.len() + 1);
     grounded.push(ChatMessage {
@@ -152,6 +176,18 @@ async fn run_tool_loop(
                     let topic = args["topic"].as_str().unwrap_or("").to_string();
                     let payload_json = args["payload_json"].as_str().unwrap_or("").to_string();
                     link.request(crate::mesh::MeshCommand::Publish { topic, payload_json }).await
+                }
+                "mesh_subscribe" => {
+                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                        .map_err(|e| format!("bad arguments: {e}"))?;
+                    let topic = args["topic"].as_str().unwrap_or("").to_string();
+                    link.request(crate::mesh::MeshCommand::Subscribe { topic }).await
+                }
+                "mesh_unsubscribe" => {
+                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                        .map_err(|e| format!("bad arguments: {e}"))?;
+                    let topic = args["topic"].as_str().unwrap_or("").to_string();
+                    link.request(crate::mesh::MeshCommand::Unsubscribe { topic }).await
                 }
                 "content_get" => {
                     let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
@@ -307,6 +343,34 @@ static TOOLS: std::sync::LazyLock<Vec<serde_json::Value>> = std::sync::LazyLock:
                         "payload_json": { "type": "string", "description": "JSON payload." }
                     },
                     "required": ["topic", "payload_json"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "mesh_subscribe",
+                "description": "Subscribe this app to a mesh topic: deliveries arrive live in the chat and in your context. Use it to watch for events you need to react to.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": { "type": "string", "description": "The topic to subscribe to." }
+                    },
+                    "required": ["topic"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "mesh_unsubscribe",
+                "description": "Stop receiving deliveries for a topic this app subscribed to.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": { "type": "string", "description": "The topic to unsubscribe from." }
+                    },
+                    "required": ["topic"]
                 }
             }
         }),

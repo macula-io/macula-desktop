@@ -798,6 +798,22 @@ body.app-open .pane { display: none; }
   overflow-wrap: anywhere;
 }
 
+.msg .event-note {
+  background: var(--orange-wash);
+  border-style: dashed;
+  font-size: 12px;
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.msg .event-note .event-publisher {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
 .chat-input-row {
   display: flex;
   align-items: flex-end;

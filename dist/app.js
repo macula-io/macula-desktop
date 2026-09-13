@@ -417,6 +417,22 @@ listen("chat-tool", (e) => {
   chatLog.scrollTop = chatLog.scrollHeight;
 });
 
+// A subscribed topic's delivery, rendered as a system line: the agent
+// sees these too, via its grounding, and can react to them in its next
+// turn.
+listen("mesh-event", (e) => {
+  document.querySelector(".chat-empty")?.remove();
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant event";
+  wrap.innerHTML =
+    '<div class="role">mesh · ' + escapeHtml(e.payload.topic) + "</div>" +
+    '<div class="bubble event-note">' +
+    escapeHtml(truncate(String(e.payload.payload), 300)) +
+    '<span class="event-publisher">' + escapeHtml(e.payload.publisher) + " · seq " + e.payload.seq + "</span></div>";
+  chatLog.appendChild(wrap);
+  chatLog.scrollTop = chatLog.scrollHeight;
+});
+
 function truncate(s, n) {
   return s.length <= n ? s : s.slice(0, n) + "…";
 }

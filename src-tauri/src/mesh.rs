@@ -19,6 +19,7 @@ use macula_rust::{
     transport::Trust,
 };
 use serde::Serialize;
+use tauri::Emitter;
 use tokio::sync::{mpsc, oneshot};
 
 /// Status is the whole mesh state the walking skeleton reports: the
@@ -38,6 +39,18 @@ pub struct Status {
     pub connected_at_ms: Option<u64>,
 }
 
+/// MeshEvent is one pub/sub delivery the mesh thread captured while the
+/// app holds a subscription: surfaced in the chat UI and fed into the
+/// agent's grounding.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeshEvent {
+    pub topic: String,
+    pub payload: String,
+    pub publisher: String,
+    pub seq: u64,
+}
+
 /// MeshCommand is a request the rest of the app can send into the mesh
 /// thread: the thread owns the Session, commands travel over a channel.
 pub enum MeshCommand {
@@ -45,6 +58,10 @@ pub enum MeshCommand {
     Call { procedure: String, args_json: String },
     /// Publish a fact to a topic (realm = the zero realm).
     Publish { topic: String, payload_json: String },
+    /// Subscribe to a topic; deliveries arrive as MeshEvents.
+    Subscribe { topic: String },
+    /// Stop receiving a topic's deliveries.
+    Unsubscribe { topic: String },
     /// Store bytes as content; returns the MCID hex.
     ContentPut { data_b64: String, name: String },
     /// Fetch content by MCID hex; returns it as text when it is text.
@@ -55,6 +72,9 @@ pub enum MeshCommand {
 pub struct MeshLink {
     status: Arc<Mutex<Status>>,
     tx: mpsc::Sender<(MeshCommand, oneshot::Sender<Result<String, String>>)>,
+    /// Subscribed topics' deliveries, newest last, capped: the chat
+    /// module grounds the agent in them and the UI shows them.
+    events: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>, 
 }
 
 impl MeshLink {
@@ -71,6 +91,11 @@ impl MeshLink {
             .map_err(|_| "mesh link dropped the request".to_string())?
     }
 
+    /// recent_events returns the captured deliveries, oldest first.
+    pub fn recent_events(&self) -> Vec<MeshEvent> {
+        self.events.lock().expect("mesh events lock").iter().cloned().collect()
+    }
+
     /// snapshot is the current mesh state, shared with the chat module
     /// so the agent can be grounded in the live link.
     pub fn snapshot(&self) -> Status {
@@ -80,8 +105,9 @@ impl MeshLink {
     /// spawn starts the mesh thread: generate a puzzle-hardened
     /// identity, connect to the station, then serve commands for the
     /// app's lifetime. Dropping the session (when the process exits)
-    /// closes the connection.
-    pub fn spawn(station: String) -> Self {
+    /// closes the connection. `app` is only used to surface event
+    /// deliveries in the UI.
+    pub fn spawn(station: String, app: tauri::AppHandle) -> Self {
         let status = Arc::new(Mutex::new(Status {
             station: station.clone(),
             identity_generated: false,
@@ -92,6 +118,9 @@ impl MeshLink {
         }));
         let (tx, mut rx) = mpsc::channel::<(MeshCommand, oneshot::Sender<Result<String, String>>)>(16);
         let thread_status = status.clone();
+        let events: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>> =
+            std::sync::Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let thread_events = events.clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime for the mesh link");
             runtime.block_on(async move {
@@ -123,32 +152,111 @@ impl MeshLink {
                 };
 
                 // The session lives here, in this loop, until the process
-                // exits: serve commands, one at a time, on the thread that
-                // owns the connection. `seq` is the per-session publish
-                // sequence: every PublishSpec must carry the next number.
+                // exits: serve commands and listen for subscribed-topic
+                // deliveries concurrently. `seq` is the per-session
+                // publish sequence: every PublishSpec must carry the next
+                // number. Known SDK caveat: while a CALL is being matched
+                // on the control stream, an EVENT arriving in the same
+                // window is discarded (see the SDK's own call() docs) --
+                // deliveries are therefore best-effort during calls and
+                // reliable while idle, which is the agent's normal state.
                 let mut seq: u64 = 0;
-                while let Some((cmd, reply_tx)) = rx.recv().await {
-                    let result = match cmd {
-                        MeshCommand::Call { procedure, args_json } => {
-                            mesh_call(&mut session, &identity, &procedure, &args_json).await
+                loop {
+                    tokio::select! {
+                        Some((cmd, reply_tx)) = rx.recv() => {
+                            let result = match cmd {
+                                MeshCommand::Call { procedure, args_json } => {
+                                    mesh_call(&mut session, &identity, &procedure, &args_json).await
+                                }
+                                MeshCommand::Publish { topic, payload_json } => {
+                                    seq += 1;
+                                    mesh_publish(&mut session, &identity, &topic, &payload_json, seq).await
+                                }
+                                MeshCommand::Subscribe { topic } => {
+                                    mesh_subscribe(&mut session, &identity, &topic).await
+                                }
+                                MeshCommand::Unsubscribe { topic } => {
+                                    mesh_unsubscribe(&mut session, &identity, &topic).await
+                                }
+                                MeshCommand::ContentPut { data_b64, name } => {
+                                    mesh_content_put(&mut session, &identity, &data_b64, &name).await
+                                }
+                                MeshCommand::ContentGet { mcid_hex } => {
+                                    mesh_content_get(&mut session, &identity, &mcid_hex).await
+                                }
+                            };
+                            let _ = reply_tx.send(result);
                         }
-                        MeshCommand::Publish { topic, payload_json } => {
-                            seq += 1;
-                            mesh_publish(&mut session, &identity, &topic, &payload_json, seq).await
+                        delivery = session.recv_event(Duration::from_secs(3600)) => {
+                            match delivery {
+                                Ok(info) => {
+                                    let event = MeshEvent {
+                                        topic: info.topic.clone(),
+                                        payload: cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string()),
+                                        publisher: hex(&info.publisher),
+                                        seq: info.seq,
+                                    };
+                                    {
+                                        let mut q = thread_events.lock().expect("mesh events lock");
+                                        q.push_back(event.clone());
+                                        while q.len() > 50 {
+                                            q.pop_front();
+                                        }
+                                    }
+                                    let _ = app.emit(
+                                        "mesh-event",
+                                        serde_json::json!({
+                                            "topic": event.topic,
+                                            "payload": event.payload,
+                                            "publisher": event.publisher,
+                                            "seq": event.seq,
+                                        }),
+                                    );
+                                }
+                                Err(_) => continue, // a missed read window; keep listening
+                            }
                         }
-                        MeshCommand::ContentPut { data_b64, name } => {
-                            mesh_content_put(&mut session, &identity, &data_b64, &name).await
-                        }
-                        MeshCommand::ContentGet { mcid_hex } => {
-                            mesh_content_get(&mut session, &identity, &mcid_hex).await
-                        }
-                    };
-                    let _ = reply_tx.send(result);
+                        else => break,
+                    }
                 }
             });
         });
-        MeshLink { status, tx }
+        MeshLink { status, tx, events }
     }
+}
+
+/// mesh_subscribe subscribes the session to a topic.
+async fn mesh_subscribe(
+    session: &mut Session,
+    identity: &KeyPair,
+    topic: &str,
+) -> Result<String, String> {
+    if topic.trim().is_empty() {
+        return Err("subscribe requires a topic".to_string());
+    }
+    let spec = frame::SubscribeSpec::new(topic, [0u8; 32], identity.node_id());
+    session
+        .subscribe(&spec, identity)
+        .await
+        .map_err(|e| format!("subscribe failed: {e}"))?;
+    Ok(format!("subscribed to {topic}"))
+}
+
+/// mesh_unsubscribe stops a topic's deliveries.
+async fn mesh_unsubscribe(
+    session: &mut Session,
+    identity: &KeyPair,
+    topic: &str,
+) -> Result<String, String> {
+    if topic.trim().is_empty() {
+        return Err("unsubscribe requires a topic".to_string());
+    }
+    let spec = frame::UnsubscribeSpec::new(topic, [0u8; 32], identity.node_id());
+    session
+        .unsubscribe(&spec, identity)
+        .await
+        .map_err(|e| format!("unsubscribe failed: {e}"))?;
+    Ok(format!("unsubscribed from {topic}"))
 }
 
 /// mesh_publish sends one fact to a topic. Fire-and-forget by protocol:

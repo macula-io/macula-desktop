@@ -19,11 +19,12 @@ use tauri::Manager;
 
 /// run starts the application.
 pub fn run() {
-    let mesh_link = mesh::MeshLink::spawn(
-        "station-de-frankfurt.macula.io".to_string(),
-    );
     tauri::Builder::default()
         .setup(move |app| {
+            let mesh_link = mesh::MeshLink::spawn(
+                "station-de-frankfurt.macula.io".to_string(),
+                app.handle().clone(),
+            );
             app.manage(mesh_link);
             Ok(())
         })
