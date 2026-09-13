@@ -3,7 +3,7 @@
 
 const { invoke } = window.__TAURI__.core;
 
-const TAB_KEYS = { c: "chat", g: "agents", t: "teams", m: "mesh", s: "services", r: "realms", l: "apps-local" };
+const TAB_KEYS = { c: "chat", g: "agents", t: "teams", o: "rooms", m: "mesh", s: "services", r: "realms", l: "apps-local" };
 
 function selectTab(name) {
   document.querySelectorAll(".tab").forEach((b) => {
@@ -14,6 +14,7 @@ function selectTab(name) {
   });
   if (name === "apps-local" || name === "apps-mesh") refreshApps();
   if (name === "agents") refreshRoster();
+  if (name === "rooms") refreshRooms();
 }
 
 document.querySelectorAll(".tab").forEach((b) => {
@@ -521,6 +522,89 @@ async function refreshRoster() {
       );
     })
     .join("");
+}
+
+// --- rooms ----------------------------------------------------------------
+
+function shortTopic(t) {
+  return t.replace("agents.room.", "").slice(0, 8);
+}
+
+async function refreshRooms() {
+  try {
+    const publicRooms = await invoke("public_rooms_command");
+    const joined = await invoke("joined_rooms_command");
+    renderPublicRooms(publicRooms, joined);
+    renderJoinedRooms(joined);
+  } catch (e) {
+    /* the pane retries on next visit */
+  }
+}
+
+function renderPublicRooms(publicRooms, joined) {
+  const list = document.getElementById("public-room-list");
+  const joinedTopics = new Set(joined.map((r) => r.topic));
+  if (publicRooms.length === 0) {
+    list.innerHTML =
+      '<div class="empty small"><div class="hint">No public rooms announced yet — they appear here as agents open them.</div></div>';
+    return;
+  }
+  list.innerHTML = publicRooms
+    .map((r) => {
+      const joinedNow = joinedTopics.has(r.topic);
+      return (
+        '<div class="room-card">' +
+        '<div class="room-info">' +
+        '<div class="room-purpose">' + escapeHtml(r.purpose || shortTopic(r.topic)) + "</div>" +
+        '<div class="room-meta">' + escapeHtml(r.openedByPetname) + " · " + escapeHtml(shortTopic(r.topic)) + "</div></div>" +
+        (joinedNow
+          ? '<button class="room-btn joined" data-topic="' + escapeHtml(r.topic) + '">joined</button>'
+          : '<button class="room-btn join" data-topic="' + escapeHtml(r.topic) + '" data-purpose="' + escapeHtml(r.purpose || "") + '">join</button>') +
+        "</div>"
+      );
+    })
+    .join("");
+  list.querySelectorAll(".room-btn.join").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await invoke("join_room", { topic: btn.dataset.topic, purpose: btn.dataset.purpose });
+      refreshRooms();
+    });
+  });
+}
+
+function renderJoinedRooms(joined) {
+  const list = document.getElementById("joined-room-list");
+  if (joined.length === 0) {
+    list.innerHTML =
+      '<div class="empty small"><div class="hint">You have not joined any rooms yet.</div></div>';
+    return;
+  }
+  list.innerHTML = joined
+    .map((r) => {
+      const last = r.messages.slice(-3)
+        .map((m) => {
+          const who = m.publisher.length > 12 ? m.publisher.slice(0, 12) + "…" : m.publisher;
+          return '<div class="room-msg"><span class="room-msg-who">' + escapeHtml(who) + "</span> " + escapeHtml(truncate(m.payload, 120)) + "</div>";
+        })
+        .join("");
+      return (
+        '<div class="room-card">' +
+        '<div class="room-info">' +
+        '<div class="room-purpose">' + escapeHtml(r.purpose || shortTopic(r.topic)) + "</div>" +
+        '<div class="room-meta">' + escapeHtml(shortTopic(r.topic)) + "</div>" +
+        (last || '<div class="room-msg dim">no messages yet</div>') +
+        "</div>" +
+        '<button class="room-btn leave" data-topic="' + escapeHtml(r.topic) + '">leave</button>' +
+        "</div>"
+      );
+    })
+    .join("");
+  list.querySelectorAll(".room-btn.leave").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await invoke("leave_room", { topic: btn.dataset.topic });
+      refreshRooms();
+    });
+  });
 }
 
 // --- titlebar window controls -------------------------------------------

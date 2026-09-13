@@ -59,6 +59,12 @@
         </svg>
         <span class="tab-label">Teams</span> <kbd>t</kbd>
       </button>
+      <button class="tab" data-tab="rooms" title="Rooms (o)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 3.5h12v7.5H5.5L2 14V3.5Z"/>
+        </svg>
+        <span class="tab-label">Rooms</span> <kbd>o</kbd>
+      </button>
       <button class="tab" data-tab="agents" title="Agents (g)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="8" cy="5.5" r="2.6"/><path d="M3 13.5c0-2.6 2.2-4 5-4s5 1.4 5 4"/>
@@ -238,6 +244,23 @@
           every agent heard in the last 15 minutes, petnamed, self included.
         </p>
         <div class="roster-list" id="roster-list"></div>
+      </section>
+
+      <section id="tab-rooms" class="pane hidden">
+        <div class="pane-title"><h1>Rooms</h1><span class="sub">conversations on the mesh</span></div>
+        <p class="pane-desc">
+          Public rooms are announced on central (<span class="value">agents.lobby</span>),
+          which the Rust core watches. Join one to receive its messages; joined
+          rooms show their recent traffic below.
+        </p>
+        <div class="rooms-section">
+          <div class="rooms-section-head">Public rooms</div>
+          <div class="room-list" id="public-room-list"></div>
+        </div>
+        <div class="rooms-section">
+          <div class="rooms-section-head">Joined</div>
+          <div class="room-list" id="joined-room-list"></div>
+        </div>
       </section>
 
       <section id="tab-teams" class="pane hidden">

@@ -69,8 +69,31 @@ pub struct RosterEntry {
 /// HELLO_TOPIC is the shared presence channel every macula tool beats on.
 const HELLO_TOPIC: &str = "agent.hello";
 
+/// LOBBY_TOPIC is central: public room announcements land here.
+const LOBBY_TOPIC: &str = "agents.lobby";
+
 /// Roster staleness: an agent unheard from for this long is pruned.
 const ROSTER_TTL_MS: u64 = 15 * 60 * 1000;
+
+/// PublicRoom is one room announced on central.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRoom {
+    pub topic: String,
+    pub purpose: String,
+    pub opened_by_petname: String,
+    pub seen_at_ms: u64,
+}
+
+/// JoinedRoom is a room this app subscribed to, with its recent
+/// messages.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinedRoom {
+    pub topic: String,
+    pub purpose: String,
+    pub messages: Vec<MeshEvent>,
+}
 
 /// MeshCommand is a request the rest of the app can send into the mesh
 /// thread: the thread owns the Session, commands travel over a channel.
@@ -83,6 +106,10 @@ pub enum MeshCommand {
     Subscribe { topic: String },
     /// Stop receiving a topic's deliveries.
     Unsubscribe { topic: String },
+    /// Join a room: subscribe to its topic and track it locally.
+    JoinRoom { topic: String, purpose: String },
+    /// Leave a room: unsubscribe and drop local tracking.
+    LeaveRoom { topic: String },
     /// Store bytes as content; returns the MCID hex.
     ContentPut { data_b64: String, name: String },
     /// Fetch content by MCID hex; returns it as text when it is text.
@@ -100,6 +127,10 @@ pub struct MeshLink {
     /// The roster: every agent.hello heard, keyed by node_id, pruned on
     /// read. Written by the mesh thread only.
     roster: std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>>,
+    /// Public rooms announced on central, keyed by topic.
+    public_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>>,
+    /// Rooms this app joined, keyed by topic, with recent messages.
+    joined_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
 }
 
 impl MeshLink {
@@ -145,6 +176,34 @@ impl MeshLink {
         entries
     }
 
+    /// public_rooms returns the rooms announced on central, newest
+    /// first.
+    pub fn public_rooms(&self) -> Vec<PublicRoom> {
+        let mut rooms: Vec<PublicRoom> = self
+            .public_rooms
+            .lock()
+            .expect("public rooms lock")
+            .values()
+            .cloned()
+            .collect();
+        rooms.sort_by(|a, b| b.seen_at_ms.cmp(&a.seen_at_ms));
+        rooms
+    }
+
+    /// joined_rooms returns this app's joined rooms with their recent
+    /// messages, oldest first per room.
+    pub fn joined_rooms(&self) -> Vec<JoinedRoom> {
+        let mut rooms: Vec<JoinedRoom> = self
+            .joined_rooms
+            .lock()
+            .expect("joined rooms lock")
+            .values()
+            .cloned()
+            .collect();
+        rooms.sort_by(|a, b| a.topic.cmp(&b.topic));
+        rooms
+    }
+
     /// snapshot is the current mesh state, shared with the chat module
     /// so the agent can be grounded in the live link.
     pub fn snapshot(&self) -> Status {
@@ -174,6 +233,12 @@ impl MeshLink {
         let roster: std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>> =
             std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
         let thread_roster = roster.clone();
+        let public_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>> =
+            std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let thread_public_rooms = public_rooms.clone();
+        let joined_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>> =
+            std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let thread_joined_rooms = joined_rooms.clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime for the mesh link");
             runtime.block_on(async move {
@@ -221,6 +286,8 @@ impl MeshLink {
                 let mut seq: u64 = 0;
                 let hello_spec = frame::SubscribeSpec::new(HELLO_TOPIC, [0u8; 32], identity.node_id());
                 let _ = session.subscribe(&hello_spec, &identity).await;
+                let lobby_spec = frame::SubscribeSpec::new(LOBBY_TOPIC, [0u8; 32], identity.node_id());
+                let _ = session.subscribe(&lobby_spec, &identity).await;
                 let own_node = hex(&identity.node_id());
                 let own_petname = crate::petname::petname(&own_node);
                 let mut heartbeat = tokio::time::interval(Duration::from_secs(60));
@@ -240,6 +307,30 @@ impl MeshLink {
                                 }
                                 MeshCommand::Unsubscribe { topic } => {
                                     mesh_unsubscribe(&mut session, &identity, &topic).await
+                                }
+                                MeshCommand::JoinRoom { topic, purpose } => {
+                                    let spec = frame::SubscribeSpec::new(&topic, [0u8; 32], identity.node_id());
+                                    match session.subscribe(&spec, &identity).await {
+                                        Ok(()) => {
+                                            thread_joined_rooms.lock().expect("joined rooms lock").entry(topic.clone()).or_insert(JoinedRoom {
+                                                topic: topic.clone(),
+                                                purpose,
+                                                messages: Vec::new(),
+                                            });
+                                            Ok(format!("joined room {topic}"))
+                                        }
+                                        Err(e) => Err(format!("join failed: {e}")),
+                                    }
+                                }
+                                MeshCommand::LeaveRoom { topic } => {
+                                    let spec = frame::UnsubscribeSpec::new(&topic, [0u8; 32], identity.node_id());
+                                    match session.unsubscribe(&spec, &identity).await {
+                                        Ok(()) => {
+                                            thread_joined_rooms.lock().expect("joined rooms lock").remove(&topic);
+                                            Ok(format!("left room {topic}"))
+                                        }
+                                        Err(e) => Err(format!("leave failed: {e}")),
+                                    }
                                 }
                                 MeshCommand::ContentPut { data_b64, name } => {
                                     mesh_content_put(&mut session, &identity, &data_b64, &name).await
@@ -274,6 +365,47 @@ impl MeshLink {
                             match delivery {
                                 Ok(info) => {
                                     let publisher = hex(&info.publisher);
+                                    if info.topic == LOBBY_TOPIC {
+                                        // Public room announcements on central.
+                                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(
+                                            &cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string()),
+                                        ) {
+                                            if json["kind"].as_str() == Some("room_opened") {
+                                                let topic = json["room_topic"].as_str().unwrap_or("").to_string();
+                                                if !topic.is_empty() {
+                                                    let now_ms = SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .map(|d| d.as_millis() as u64)
+                                                        .unwrap_or(0);
+                                                    thread_public_rooms.lock().expect("public rooms lock").insert(
+                                                        topic.clone(),
+                                                        PublicRoom {
+                                                            purpose: json["purpose"].as_str().unwrap_or("").to_string(),
+                                                            topic,
+                                                            opened_by_petname: crate::petname::petname(&publisher),
+                                                            seen_at_ms: now_ms,
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        continue;
+                                    }
+                                    if info.topic.starts_with("agents.room.") {
+                                        // A message in a room this app joined.
+                                        if let Some(room) = thread_joined_rooms.lock().expect("joined rooms lock").get_mut(&info.topic) {
+                                            room.messages.push(MeshEvent {
+                                                topic: info.topic.clone(),
+                                                payload: cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string()),
+                                                publisher,
+                                                seq: info.seq,
+                                            });
+                                            while room.messages.len() > 50 {
+                                                room.messages.remove(0);
+                                            }
+                                        }
+                                        continue;
+                                    }
                                     if info.topic == HELLO_TOPIC {
                                         // Fold into the roster; never into the
                                         // chat, and never wake the reactor.
@@ -334,7 +466,7 @@ impl MeshLink {
                 }
             });
         });
-        MeshLink { status, tx, events, roster }
+        MeshLink { status, tx, events, roster, public_rooms, joined_rooms }
     }
 }
 
@@ -560,6 +692,37 @@ pub fn mesh_status(link: tauri::State<'_, MeshLink>) -> Status {
 #[tauri::command]
 pub fn roster(link: tauri::State<'_, MeshLink>) -> Vec<RosterEntry> {
     link.roster()
+}
+
+/// public_rooms_command lists the rooms announced on central.
+#[tauri::command]
+pub fn public_rooms_command(link: tauri::State<'_, MeshLink>) -> Vec<PublicRoom> {
+    link.public_rooms()
+}
+
+/// joined_rooms_command lists this app's joined rooms with messages.
+#[tauri::command]
+pub fn joined_rooms_command(link: tauri::State<'_, MeshLink>) -> Vec<JoinedRoom> {
+    link.joined_rooms()
+}
+
+/// join_room subscribes the session to a room topic and tracks it.
+#[tauri::command]
+pub async fn join_room(
+    link: tauri::State<'_, MeshLink>,
+    topic: String,
+    purpose: String,
+) -> Result<(), String> {
+    link.request(MeshCommand::JoinRoom { topic, purpose }).await.map(|_| ())
+}
+
+/// leave_room unsubscribes and drops local tracking.
+#[tauri::command]
+pub async fn leave_room(
+    link: tauri::State<'_, MeshLink>,
+    topic: String,
+) -> Result<(), String> {
+    link.request(MeshCommand::LeaveRoom { topic }).await.map(|_| ())
 }
 
 fn hex(bytes: &[u8; 32]) -> String {
