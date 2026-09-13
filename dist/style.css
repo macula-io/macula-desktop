@@ -783,7 +783,7 @@ body.app-open .pane { display: none; }
 
 .msg .error-note { color: var(--bad); font-size: 12px; margin-top: 4px; }
 
-.msg .tool-note {
+.msg .bubble.tool-note {
   background: var(--bg-deep);
   border-style: dashed;
   font-size: 12px;
@@ -793,14 +793,14 @@ body.app-open .pane { display: none; }
   gap: 3px;
 }
 
-.msg .tool-note .tool-result {
+.msg .bubble.tool-note .tool-result {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--faint);
   overflow-wrap: anywhere;
 }
 
-.msg .event-note {
+.msg .bubble.event-note {
   background: var(--orange-wash);
   border-style: dashed;
   font-size: 12px;
@@ -810,7 +810,7 @@ body.app-open .pane { display: none; }
   gap: 4px;
 }
 
-.msg .event-note .event-publisher {
+.msg .bubble.event-note .event-publisher {
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--faint);

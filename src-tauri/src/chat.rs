@@ -211,7 +211,7 @@ pub fn maybe_react(app: &tauri::AppHandle) {
                 .collect();
             history.push(ChatMessage {
                 role: "user".to_string(),
-                content: "A new mesh event just arrived on one of your subscribed topics (see your context). React as appropriate -- observe, act with your mesh tools if the event calls for it, or note it briefly.".to_string(),
+                content: "A new mesh event just arrived on one of your subscribed topics (see your context). React as appropriate -- observe, act with your mesh tools if the event calls for it, or note it briefly. Do NOT resubscribe to topics you are already subscribed to.".to_string(),
                 tool_calls: None,
                 tool_call_id: None,
             });
