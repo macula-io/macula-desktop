@@ -98,10 +98,12 @@ pub struct JoinedRoom {
 /// MeshCommand is a request the rest of the app can send into the mesh
 /// thread: the thread owns the Session, commands travel over a channel.
 pub enum MeshCommand {
-    /// Call a procedure on the mesh, JSON args in, JSON result out.
+    /// Call a procedure on the mesh, JSON args in, JSON result out,
+    /// in the given realm.
     Call {
         procedure: String,
         args_json: String,
+        realm: [u8; 32],
     },
     /// Publish a fact to a topic (realm = the zero realm).
     Publish { topic: String, payload_json: String },
@@ -305,8 +307,8 @@ impl MeshLink {
                     tokio::select! {
                         Some((cmd, reply_tx)) = rx.recv() => {
                             let result = match cmd {
-                                MeshCommand::Call { procedure, args_json } => {
-                                    mesh_call(&mut session, &identity, &procedure, &args_json).await
+                                MeshCommand::Call { procedure, args_json, realm } => {
+                                    mesh_call(&mut session, &identity, &procedure, &args_json, realm).await
                                 }
                                 MeshCommand::Publish { topic, payload_json } => {
                                     seq += 1;
@@ -676,12 +678,14 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
 }
 
 /// mesh_call invokes one procedure through the live session: JSON args
-/// in, JSON result (or a BOLT error) out, 30s deadline.
+/// in, JSON result (or a BOLT error) out, 30s deadline, in the given
+/// realm.
 async fn mesh_call(
     session: &mut Session,
     identity: &KeyPair,
     procedure: &str,
     args_json: &str,
+    realm: [u8; 32],
 ) -> Result<String, String> {
     let payload = match json_to_cbor(serde_json::from_str::<serde_json::Value>(args_json).ok()) {
         Ok(v) => v,
@@ -694,7 +698,7 @@ async fn mesh_call(
     match session
         .call(
             procedure,
-            [0u8; 32],
+            realm,
             payload,
             deadline,
             identity,

@@ -62,6 +62,8 @@ pub struct ChatState {
     pub approve_all: std::sync::Mutex<bool>,
     /// memory: recall/remember against hecate-rag (see Settings).
     pub memory: std::sync::Mutex<bool>,
+    /// memory_realm: the realm tag memory calls carry (64 hex chars).
+    pub memory_realm: std::sync::Mutex<String>,
     /// interrupt: the operator asked to stop the current turn; the
     /// stream loop checks it between chunks.
     pub interrupt: std::sync::atomic::AtomicBool,
@@ -76,6 +78,7 @@ impl Default for ChatState {
             pending_approvals: std::sync::Mutex::new(std::collections::HashMap::new()),
             approve_all: std::sync::Mutex::new(false),
             memory: std::sync::Mutex::new(false),
+            memory_realm: std::sync::Mutex::new(String::new()),
             interrupt: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -141,6 +144,11 @@ pub struct Settings {
     /// written without the operator turning this on.
     #[serde(default)]
     pub memory: bool,
+    /// memory_realm: the realm memory operates in (64 hex chars).
+    /// Memory is GATED by realm context: without a valid realm the
+    /// memory flag is inert, never silently zero-realm.
+    #[serde(default)]
+    pub memory_realm: String,
 }
 
 /// transcript_path is the append-only conversation log:
@@ -227,6 +235,24 @@ fn settings_path() -> Option<PathBuf> {
     Some(path)
 }
 
+/// parse_realm validates a 64-hex-char realm tag into its 32 bytes.
+fn parse_realm(hex: &str) -> Result<Option<[u8; 32]>, String> {
+    let hex = hex.trim();
+    if hex.is_empty() {
+        return Ok(None);
+    }
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| format!("bad realm hex: {e}")))
+        .collect::<Result<Vec<u8>, String>>()?;
+    let mut out = [0u8; 32];
+    if bytes.len() != 32 {
+        return Err("a realm tag is 64 hex chars (32 bytes)".to_string());
+    }
+    out.copy_from_slice(&bytes);
+    Ok(Some(out))
+}
+
 /// chat_settings returns the persisted policy (defaults when absent).
 #[tauri::command]
 pub fn chat_settings() -> Settings {
@@ -236,6 +262,7 @@ pub fn chat_settings() -> Settings {
         .unwrap_or(Settings {
             auto_react: false,
             memory: false,
+            memory_realm: String::new(),
         })
 }
 
@@ -246,17 +273,31 @@ pub fn set_chat_settings(
     state: tauri::State<'_, ChatState>,
     auto_react: bool,
     memory: bool,
+    memory_realm: String,
 ) -> Result<(), String> {
     *state.auto_react.lock().expect("chat policy lock") = auto_react;
-    *state.memory.lock().expect("chat policy lock") = memory;
+    let realm = parse_realm(&memory_realm)?;
+    let effective = memory && realm.is_some();
+    if memory && realm.is_none() {
+        return Err(
+            "mesh memory requires a realm: a 64-hex-char realm tag (it is never silently zero-realm)"
+                .to_string(),
+        );
+    }
+    *state.memory.lock().expect("chat policy lock") = effective;
+    *state.memory_realm.lock().expect("chat policy lock") = memory_realm.clone();
     let Some(path) = settings_path() else {
         return Err("no config directory could be determined".to_string());
     };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create config directory: {e}"))?;
     }
-    let text = serde_json::to_string_pretty(&Settings { auto_react, memory })
-        .map_err(|e| format!("encode settings: {e}"))?;
+    let text = serde_json::to_string_pretty(&Settings {
+        auto_react,
+        memory,
+        memory_realm: memory_realm.clone(),
+    })
+    .map_err(|e| format!("encode settings: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).map_err(|e| format!("write settings: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("commit settings: {e}"))?;
@@ -304,9 +345,10 @@ fn run_user_turn(app: tauri::AppHandle) {
             .cloned()
             .collect();
         let memory_on = *state.memory.lock().expect("chat policy lock");
+        let memory_realm = memory_realm(&state);
         let memory_text = if memory_on {
             let query = last_user_message(&history);
-            recall_memory(&link, &query).await
+            recall_memory(&link, &query, memory_realm).await
         } else {
             String::new()
         };
@@ -322,10 +364,18 @@ fn run_user_turn(app: tauri::AppHandle) {
                 .cloned()
                 .collect();
             if let Ok(summary) = summarize_turn(&history).await {
-                remember_turn(&link, &summary).await;
+                remember_turn(&link, &summary, memory_realm).await;
             }
         }
     });
+}
+
+/// memory_realm resolves the configured realm tag to its bytes. The
+/// value is validated on save, so a failure here means the operator
+/// edited the file by hand -- memory simply stays gated off.
+fn memory_realm(state: &ChatState) -> [u8; 32] {
+    let hex = state.memory_realm.lock().expect("chat policy lock").clone();
+    parse_realm(&hex).ok().flatten().unwrap_or([0u8; 32])
 }
 
 /// last_user_message is the newest operator turn, the memory query.
@@ -410,7 +460,7 @@ pub fn maybe_react(app: &tauri::AppHandle) {
             });
             let memory_text = if *state.memory.lock().expect("chat policy lock") {
                 let query = last_user_message(&history);
-                recall_memory(&link, &query).await
+                recall_memory(&link, &query, memory_realm(&state)).await
             } else {
                 String::new()
             };
@@ -599,6 +649,7 @@ async fn execute_tool(link: &crate::mesh::MeshLink, call: &ToolCall) -> Result<S
                 link.request(crate::mesh::MeshCommand::Call {
                     procedure,
                     args_json,
+                    realm: [0u8; 32],
                 })
                 .await
             }
@@ -848,7 +899,7 @@ static TOOLS: std::sync::LazyLock<Vec<serde_json::Value>> = std::sync::LazyLock:
 /// recall_memory asks hecate-rag for anything relevant to the query.
 /// Best-effort: memory failures never break a turn, they just leave it
 /// ungrounded.
-async fn recall_memory(link: &crate::mesh::MeshLink, query: &str) -> String {
+async fn recall_memory(link: &crate::mesh::MeshLink, query: &str, realm: [u8; 32]) -> String {
     if query.is_empty() {
         return String::new();
     }
@@ -857,6 +908,7 @@ async fn recall_memory(link: &crate::mesh::MeshLink, query: &str) -> String {
         .request(crate::mesh::MeshCommand::Call {
             procedure: "answer_query".to_string(),
             args_json: args,
+            realm,
         })
         .await
     {
@@ -870,7 +922,7 @@ async fn recall_memory(link: &crate::mesh::MeshLink, query: &str) -> String {
 
 /// remember_turn deposits one summary into hecate-rag. Best-effort,
 /// like recall.
-async fn remember_turn(link: &crate::mesh::MeshLink, summary: &str) {
+async fn remember_turn(link: &crate::mesh::MeshLink, summary: &str, realm: [u8; 32]) {
     if summary.trim().is_empty() {
         return;
     }
@@ -880,6 +932,7 @@ async fn remember_turn(link: &crate::mesh::MeshLink, summary: &str) {
         .request(crate::mesh::MeshCommand::Call {
             procedure: "add_knowledge".to_string(),
             args_json: args,
+            realm,
         })
         .await
     {

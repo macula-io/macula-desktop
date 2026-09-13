@@ -352,6 +352,20 @@ body {
 
 .pane-title .autoreact { margin-left: auto; font-size: 12px; white-space: nowrap; }
 
+.realm-input {
+  margin-left: auto;
+  appearance: none;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  width: 190px;
+}
+.realm-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .pane-desc { color: var(--dim); margin-bottom: 24px; max-width: 620px; }
 
 /* ---------- cards ---------- */

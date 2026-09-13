@@ -219,6 +219,7 @@
           <label class="form-check autoreact" title="Recall relevant memory from the mesh each turn and remember short outcome summaries. Memory is shared -- enable only if you want this agent's knowledge on the mesh.">
             <input id="memory-toggle" type="checkbox" /> mesh memory
           </label>
+          <input id="memory-realm" type="text" class="realm-input hidden" placeholder="realm tag (64 hex)" title="The realm memory operates in. Memory is gated by realm context: it stays off without a valid 64-hex realm tag." autocomplete="off" />
         </div>
         <div class="chat-wrap">
           <div class="chat-log" id="chat-log">

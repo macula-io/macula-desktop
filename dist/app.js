@@ -470,13 +470,26 @@ document.getElementById("autoreact-toggle").addEventListener("change", () => {
   syncChatSettings();
 });
 document.getElementById("memory-toggle").addEventListener("change", () => {
+  const on = document.getElementById("memory-toggle").checked;
+  const realmInput = document.getElementById("memory-realm");
+  realmInput.classList.toggle("hidden", !on);
+  if (on) realmInput.focus();
   syncChatSettings();
 });
+document.getElementById("memory-realm").addEventListener("change", () => syncChatSettings());
 
 function syncChatSettings() {
+  const realm = document.getElementById("memory-realm").value.trim();
   invoke("set_chat_settings", {
     autoReact: document.getElementById("autoreact-toggle").checked,
     memory: document.getElementById("memory-toggle").checked,
+    memoryRealm: realm,
+  }).catch((e) => {
+    // The most likely cause: memory on without a valid realm -- which
+    // is exactly the gate, so un-check rather than fail silently.
+    document.getElementById("memory-toggle").checked = false;
+    document.getElementById("memory-realm").classList.add("hidden");
+    console.warn("chat settings rejected:", e);
   });
 }
 
@@ -791,5 +804,7 @@ setInterval(refreshMesh, 2000);
   const s = await invoke("chat_settings");
   document.getElementById("autoreact-toggle").checked = s.autoReact;
   document.getElementById("memory-toggle").checked = s.memory;
+  document.getElementById("memory-realm").value = s.memoryRealm || "";
+  document.getElementById("memory-realm").classList.toggle("hidden", !s.memory);
 })();
 setInterval(tickUptime, 1000);
