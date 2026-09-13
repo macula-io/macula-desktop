@@ -7,6 +7,12 @@
 //! lowercased hex, then three 16-bit reads modulo the list lengths).
 //! A companion label, never a replacement: the real node_id stays next
 //! to it everywhere, since only the real id is addressable.
+//!
+//! PROVENANCE: this is a stopgap copy. The function's proper home is
+//! the SDK -- macula-io/macula-rust PR #1 adds
+//! `macula_rust::petname::petname`. Once that ships in a published
+//! crate version, THIS MODULE IS DELETED and every call site switches
+//! to the SDK function.
 
 use sha2::{Digest, Sha256};
 
