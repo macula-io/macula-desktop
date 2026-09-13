@@ -20,3 +20,4 @@ desktop.ini
 # Frontend tooling, if/when the dist/ source gains a bundler
 node_modules/
 .vite/
+/linting/target/

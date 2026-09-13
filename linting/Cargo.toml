@@ -1,0 +1,3 @@
+[workspace]
+members = ["libraries/max_nesting_depth"]
+resolver = "2"
