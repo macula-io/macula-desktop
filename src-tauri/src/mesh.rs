@@ -309,28 +309,10 @@ impl MeshLink {
                                     mesh_unsubscribe(&mut session, &identity, &topic).await
                                 }
                                 MeshCommand::JoinRoom { topic, purpose } => {
-                                    let spec = frame::SubscribeSpec::new(&topic, [0u8; 32], identity.node_id());
-                                    match session.subscribe(&spec, &identity).await {
-                                        Ok(()) => {
-                                            thread_joined_rooms.lock().expect("joined rooms lock").entry(topic.clone()).or_insert(JoinedRoom {
-                                                topic: topic.clone(),
-                                                purpose,
-                                                messages: Vec::new(),
-                                            });
-                                            Ok(format!("joined room {topic}"))
-                                        }
-                                        Err(e) => Err(format!("join failed: {e}")),
-                                    }
+                                    join_room_command(&mut session, &identity, &topic, &purpose, &thread_joined_rooms).await
                                 }
                                 MeshCommand::LeaveRoom { topic } => {
-                                    let spec = frame::UnsubscribeSpec::new(&topic, [0u8; 32], identity.node_id());
-                                    match session.unsubscribe(&spec, &identity).await {
-                                        Ok(()) => {
-                                            thread_joined_rooms.lock().expect("joined rooms lock").remove(&topic);
-                                            Ok(format!("left room {topic}"))
-                                        }
-                                        Err(e) => Err(format!("leave failed: {e}")),
-                                    }
+                                    leave_room_command(&mut session, &identity, &topic, &thread_joined_rooms).await
                                 }
                                 MeshCommand::ContentPut { data_b64, name } => {
                                     mesh_content_put(&mut session, &identity, &data_b64, &name).await
@@ -362,103 +344,8 @@ impl MeshLink {
                             let _ = session.publish(&spec, &identity).await;
                         }
                         delivery = session.recv_event(Duration::from_secs(3600)) => {
-                            match delivery {
-                                Ok(info) => {
-                                    let publisher = hex(&info.publisher);
-                                    if info.topic == LOBBY_TOPIC {
-                                        // Public room announcements on central.
-                                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(
-                                            &cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string()),
-                                        ) {
-                                            if json["kind"].as_str() == Some("room_opened") {
-                                                let topic = json["room_topic"].as_str().unwrap_or("").to_string();
-                                                if !topic.is_empty() {
-                                                    let now_ms = SystemTime::now()
-                                                        .duration_since(UNIX_EPOCH)
-                                                        .map(|d| d.as_millis() as u64)
-                                                        .unwrap_or(0);
-                                                    thread_public_rooms.lock().expect("public rooms lock").insert(
-                                                        topic.clone(),
-                                                        PublicRoom {
-                                                            purpose: json["purpose"].as_str().unwrap_or("").to_string(),
-                                                            topic,
-                                                            opened_by_petname: crate::petname::petname(&publisher),
-                                                            seen_at_ms: now_ms,
-                                                        },
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        continue;
-                                    }
-                                    if info.topic.starts_with("agents.room.") {
-                                        // A message in a room this app joined.
-                                        if let Some(room) = thread_joined_rooms.lock().expect("joined rooms lock").get_mut(&info.topic) {
-                                            room.messages.push(MeshEvent {
-                                                topic: info.topic.clone(),
-                                                payload: cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string()),
-                                                publisher,
-                                                seq: info.seq,
-                                            });
-                                            while room.messages.len() > 50 {
-                                                room.messages.remove(0);
-                                            }
-                                        }
-                                        continue;
-                                    }
-                                    if info.topic == HELLO_TOPIC {
-                                        // Fold into the roster; never into the
-                                        // chat, and never wake the reactor.
-                                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(
-                                            &cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string()),
-                                        ) {
-                                            let now_ms = SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .map(|d| d.as_millis() as u64)
-                                                .unwrap_or(0);
-                                            thread_roster.lock().expect("roster lock").insert(
-                                                publisher.clone(),
-                                                RosterEntry {
-                                                    node_id: publisher.clone(),
-                                                    petname: crate::petname::petname(&publisher),
-                                                    operator_name: json["operator_name"].as_str().unwrap_or("").to_string(),
-                                                    model: json["model"].as_str().unwrap_or("").to_string(),
-                                                    last_seen_ms: now_ms,
-                                                    is_self: publisher == own_node,
-                                                },
-                                            );
-                                        }
-                                        continue;
-                                    }
-                                    let event = MeshEvent {
-                                        topic: info.topic.clone(),
-                                        payload: cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string()),
-                                        publisher,
-                                        seq: info.seq,
-                                    };
-                                    {
-                                        let mut q = thread_events.lock().expect("mesh events lock");
-                                        q.push_back(event.clone());
-                                        while q.len() > 50 {
-                                            q.pop_front();
-                                        }
-                                    }
-                                    let _ = app.emit(
-                                        "mesh-event",
-                                        serde_json::json!({
-                                            "topic": event.topic,
-                                            "payload": event.payload,
-                                            "publisher": event.publisher,
-                                            "publisher_petname": crate::petname::petname(&event.publisher),
-                                            "seq": event.seq,
-                                        }),
-                                    );
-                                    // The auto-react policy lives in the chat
-                                    // module: when it is on, this wake turns
-                                    // the event into an agent turn.
-                                    crate::chat::maybe_react(&app);
-                                }
-                                Err(_) => continue, // a missed read window; keep listening
+                            if let Ok(info) = delivery {
+                                route_event(&info, &app, &own_node, &thread_roster, &thread_public_rooms, &thread_joined_rooms, &thread_events);
                             }
                         }
                         else => break,
@@ -468,6 +355,190 @@ impl MeshLink {
         });
         MeshLink { status, tx, events, roster, public_rooms, joined_rooms }
     }
+}
+
+/// join_room_command subscribes to a room topic and tracks it locally.
+async fn join_room_command(
+    session: &mut Session,
+    identity: &KeyPair,
+    topic: &str,
+    purpose: &str,
+    joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
+) -> Result<String, String> {
+    let spec = frame::SubscribeSpec::new(topic, [0u8; 32], identity.node_id());
+    session
+        .subscribe(&spec, identity)
+        .await
+        .map_err(|e| format!("join failed: {e}"))?;
+    joined.lock().expect("joined rooms lock").entry(topic.to_string()).or_insert(JoinedRoom {
+        topic: topic.to_string(),
+        purpose: purpose.to_string(),
+        messages: Vec::new(),
+    });
+    Ok(format!("joined room {topic}"))
+}
+
+/// leave_room_command unsubscribes and drops local tracking.
+async fn leave_room_command(
+    session: &mut Session,
+    identity: &KeyPair,
+    topic: &str,
+    joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
+) -> Result<String, String> {
+    let spec = frame::UnsubscribeSpec::new(topic, [0u8; 32], identity.node_id());
+    session
+        .unsubscribe(&spec, identity)
+        .await
+        .map_err(|e| format!("leave failed: {e}"))?;
+    joined.lock().expect("joined rooms lock").remove(topic);
+    Ok(format!("left room {topic}"))
+}
+
+/// route_event sends one delivery to its one true store: lobby
+/// announcements to public rooms, room traffic to joined rooms,
+/// heartbeats to the roster, everything else to the chat feed.
+fn route_event(
+    info: &frame::EventInfo,
+    app: &tauri::AppHandle,
+    own_node: &str,
+    roster: &std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>>,
+    public_rooms: &std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>>,
+    joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
+    events: &std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
+) {
+    let publisher = hex(&info.publisher);
+    if info.topic == LOBBY_TOPIC {
+        note_public_room(info, &publisher, public_rooms);
+        return;
+    }
+    if info.topic.starts_with("agents.room.") {
+        note_room_message(info, &publisher, joined);
+        return;
+    }
+    if info.topic == HELLO_TOPIC {
+        note_roster_entry(info, &publisher, own_node, roster);
+        return;
+    }
+    note_chat_event(info, &publisher, events, app);
+}
+
+/// note_public_room records a room_opened announcement from central.
+fn note_public_room(
+    info: &frame::EventInfo,
+    publisher: &str,
+    public_rooms: &std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>>,
+) {
+    let payload = event_json(info);
+    if payload["kind"].as_str() != Some("room_opened") {
+        return;
+    }
+    let topic = payload["room_topic"].as_str().unwrap_or("").to_string();
+    if topic.is_empty() {
+        return;
+    }
+    public_rooms.lock().expect("public rooms lock").insert(
+        topic.clone(),
+        PublicRoom {
+            purpose: payload["purpose"].as_str().unwrap_or("").to_string(),
+            topic,
+            opened_by_petname: crate::petname::petname(publisher),
+            seen_at_ms: now_ms(),
+        },
+    );
+}
+
+/// note_room_message appends one delivery to its joined room.
+fn note_room_message(
+    info: &frame::EventInfo,
+    publisher: &str,
+    joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
+) {
+    let mut rooms = joined.lock().expect("joined rooms lock");
+    let Some(room) = rooms.get_mut(&info.topic) else {
+        return;
+    };
+    room.messages.push(MeshEvent {
+        topic: info.topic.clone(),
+        payload: event_payload(info),
+        publisher: publisher.to_string(),
+        seq: info.seq,
+    });
+    while room.messages.len() > 50 {
+        room.messages.remove(0);
+    }
+}
+
+/// note_roster_entry folds one heartbeat into the presence roster.
+fn note_roster_entry(
+    info: &frame::EventInfo,
+    publisher: &str,
+    own_node: &str,
+    roster: &std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>>,
+) {
+    let payload = event_json(info);
+    roster.lock().expect("roster lock").insert(
+        publisher.to_string(),
+        RosterEntry {
+            node_id: publisher.to_string(),
+            petname: crate::petname::petname(publisher),
+            operator_name: payload["operator_name"].as_str().unwrap_or("").to_string(),
+            model: payload["model"].as_str().unwrap_or("").to_string(),
+            last_seen_ms: now_ms(),
+            is_self: publisher == own_node,
+        },
+    );
+}
+
+/// note_chat_event buffers one delivery for the chat feed and wakes the
+/// auto-react policy.
+fn note_chat_event(
+    info: &frame::EventInfo,
+    publisher: &str,
+    events: &std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
+    app: &tauri::AppHandle,
+) {
+    let event = MeshEvent {
+        topic: info.topic.clone(),
+        payload: event_payload(info),
+        publisher: publisher.to_string(),
+        seq: info.seq,
+    };
+    {
+        let mut q = events.lock().expect("mesh events lock");
+        q.push_back(event.clone());
+        while q.len() > 50 {
+            q.pop_front();
+        }
+    }
+    let _ = app.emit(
+        "mesh-event",
+        serde_json::json!({
+            "topic": event.topic,
+            "payload": event.payload,
+            "publisher": event.publisher,
+            "publisher_petname": crate::petname::petname(&event.publisher),
+            "seq": event.seq,
+        }),
+    );
+    crate::chat::maybe_react(app);
+}
+
+/// event_payload renders a delivery's payload as a JSON string.
+fn event_payload(info: &frame::EventInfo) -> String {
+    cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// event_json parses a delivery's payload as a JSON value.
+fn event_json(info: &frame::EventInfo) -> serde_json::Value {
+    serde_json::from_str(&event_payload(info)).unwrap_or(serde_json::Value::Null)
+}
+
+/// now_ms is the current epoch time in milliseconds.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// mesh_subscribe subscribes the session to a topic.
