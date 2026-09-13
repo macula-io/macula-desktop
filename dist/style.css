@@ -902,6 +902,55 @@ body.app-open .pane { display: none; }
 .chat-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .chat-send:disabled { opacity: 0.5; cursor: default; }
 
+/* ---------- agents roster ---------- */
+
+.roster-list { display: flex; flex-direction: column; gap: 8px; }
+
+.roster-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+
+.roster-card.self { border-color: var(--accent); background: var(--accent-wash); }
+
+.roster-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.roster-info { flex: 1; min-width: 0; }
+
+.roster-name { font-weight: 600; font-size: 13.5px; }
+
+.self-tag {
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0 7px;
+  margin-left: 6px;
+}
+
+.roster-sub { color: var(--dim); font-size: 12px; }
+
+.roster-id { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+
+.roster-seen { font-family: var(--mono); font-size: 11px; color: var(--faint); flex-shrink: 0; }
+
 /* ---------- empty states ---------- */
 
 .empty {

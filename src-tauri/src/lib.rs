@@ -32,6 +32,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             mesh::mesh_status,
+            mesh::roster,
             chat::chat_send,
             chat::chat_settings,
             chat::set_chat_settings,

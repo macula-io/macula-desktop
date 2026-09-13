@@ -54,6 +54,24 @@ pub struct MeshEvent {
     pub seq: u64,
 }
 
+/// RosterEntry is one agent the desktop has heard a heartbeat from.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterEntry {
+    pub node_id: String,
+    pub petname: String,
+    pub operator_name: String,
+    pub model: String,
+    pub last_seen_ms: u64,
+    pub is_self: bool,
+}
+
+/// HELLO_TOPIC is the shared presence channel every macula tool beats on.
+const HELLO_TOPIC: &str = "agent.hello";
+
+/// Roster staleness: an agent unheard from for this long is pruned.
+const ROSTER_TTL_MS: u64 = 15 * 60 * 1000;
+
 /// MeshCommand is a request the rest of the app can send into the mesh
 /// thread: the thread owns the Session, commands travel over a channel.
 pub enum MeshCommand {
@@ -76,8 +94,12 @@ pub struct MeshLink {
     status: Arc<Mutex<Status>>,
     tx: mpsc::Sender<(MeshCommand, oneshot::Sender<Result<String, String>>)>,
     /// Subscribed topics' deliveries, newest last, capped: the chat
-    /// module grounds the agent in them and the UI shows them.
-    events: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>, 
+    /// module grounds the agent in them and the UI shows them. Presence
+    /// traffic never lands here.
+    events: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
+    /// The roster: every agent.hello heard, keyed by node_id, pruned on
+    /// read. Written by the mesh thread only.
+    roster: std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>>,
 }
 
 impl MeshLink {
@@ -97,6 +119,30 @@ impl MeshLink {
     /// recent_events returns the captured deliveries, oldest first.
     pub fn recent_events(&self) -> Vec<MeshEvent> {
         self.events.lock().expect("mesh events lock").iter().cloned().collect()
+    }
+
+    /// roster returns the presence list, most recently seen first, with
+    /// this app's own node marked. Stale entries are pruned on read.
+    pub fn roster(&self) -> Vec<RosterEntry> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let own_id = self.snapshot().node_id;
+        let mut entries: Vec<RosterEntry> = self
+            .roster
+            .lock()
+            .expect("roster lock")
+            .values()
+            .filter(|e| now.saturating_sub(e.last_seen_ms) < ROSTER_TTL_MS)
+            .cloned()
+            .map(|mut e| {
+                e.is_self = e.node_id == own_id;
+                e
+            })
+            .collect();
+        entries.sort_by(|a, b| b.last_seen_ms.cmp(&a.last_seen_ms));
+        entries
     }
 
     /// snapshot is the current mesh state, shared with the chat module
@@ -125,6 +171,9 @@ impl MeshLink {
         let events: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>> =
             std::sync::Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let thread_events = events.clone();
+        let roster: std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>> =
+            std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let thread_roster = roster.clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime for the mesh link");
             runtime.block_on(async move {
@@ -165,7 +214,16 @@ impl MeshLink {
                 // window is discarded (see the SDK's own call() docs) --
                 // deliveries are therefore best-effort during calls and
                 // reliable while idle, which is the agent's normal state.
+                //
+                // Presence is part of the link itself: subscribe to the
+                // shared hello topic once, beat our own heart every
+                // minute, and fold every hello heard into the roster.
                 let mut seq: u64 = 0;
+                let hello_spec = frame::SubscribeSpec::new(HELLO_TOPIC, [0u8; 32], identity.node_id());
+                let _ = session.subscribe(&hello_spec, &identity).await;
+                let own_node = hex(&identity.node_id());
+                let own_petname = crate::petname::petname(&own_node);
+                let mut heartbeat = tokio::time::interval(Duration::from_secs(60));
                 loop {
                     tokio::select! {
                         Some((cmd, reply_tx)) = rx.recv() => {
@@ -192,13 +250,58 @@ impl MeshLink {
                             };
                             let _ = reply_tx.send(result);
                         }
+                        _ = heartbeat.tick() => {
+                            seq += 1;
+                            let now_ms = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+                            let payload = json_to_cbor(Some(serde_json::json!({
+                                "node_id": own_node,
+                                "citizen_did": own_node,
+                                "petname": own_petname,
+                                "connected_via": "macula-desktop",
+                                "interval_seconds": 60,
+                                "at": now_ms,
+                            })))
+                            .unwrap_or(Value::Null);
+                            let spec = frame::PublishSpec::new(
+                                HELLO_TOPIC, [0u8; 32], identity.node_id(), seq, payload, now_ms,
+                            );
+                            let _ = session.publish(&spec, &identity).await;
+                        }
                         delivery = session.recv_event(Duration::from_secs(3600)) => {
                             match delivery {
                                 Ok(info) => {
+                                    let publisher = hex(&info.publisher);
+                                    if info.topic == HELLO_TOPIC {
+                                        // Fold into the roster; never into the
+                                        // chat, and never wake the reactor.
+                                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(
+                                            &cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string()),
+                                        ) {
+                                            let now_ms = SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .map(|d| d.as_millis() as u64)
+                                                .unwrap_or(0);
+                                            thread_roster.lock().expect("roster lock").insert(
+                                                publisher.clone(),
+                                                RosterEntry {
+                                                    node_id: publisher.clone(),
+                                                    petname: crate::petname::petname(&publisher),
+                                                    operator_name: json["operator_name"].as_str().unwrap_or("").to_string(),
+                                                    model: json["model"].as_str().unwrap_or("").to_string(),
+                                                    last_seen_ms: now_ms,
+                                                    is_self: publisher == own_node,
+                                                },
+                                            );
+                                        }
+                                        continue;
+                                    }
                                     let event = MeshEvent {
                                         topic: info.topic.clone(),
                                         payload: cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string()),
-                                        publisher: hex(&info.publisher),
+                                        publisher,
                                         seq: info.seq,
                                     };
                                     {
@@ -231,7 +334,7 @@ impl MeshLink {
                 }
             });
         });
-        MeshLink { status, tx, events }
+        MeshLink { status, tx, events, roster }
     }
 }
 
@@ -451,6 +554,12 @@ fn cbor_to_json(v: &Value) -> Result<String, String> {
 #[tauri::command]
 pub fn mesh_status(link: tauri::State<'_, MeshLink>) -> Status {
     link.status.lock().expect("mesh status lock").clone()
+}
+
+/// roster is the presence list, most recently seen first, self marked.
+#[tauri::command]
+pub fn roster(link: tauri::State<'_, MeshLink>) -> Vec<RosterEntry> {
+    link.roster()
 }
 
 fn hex(bytes: &[u8; 32]) -> String {

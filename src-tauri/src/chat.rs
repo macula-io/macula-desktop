@@ -349,12 +349,12 @@ async fn run_turn(
             let gated = GATED_TOOLS.contains(&call.function.name.as_str());
             let result: Result<String, String> = if gated {
                 match request_approval(app, call).await {
-                    Some(true) => execute_tool(app, link, call).await,
+                    Some(true) => execute_tool(link, call).await,
                     Some(false) => Err("denied by the operator".to_string()),
                     None => Err("approval timed out after 10 minutes".to_string()),
                 }
             } else {
-                execute_tool(app, link, call).await
+                execute_tool(link, call).await
             };
             let content = match result {
                 Ok(ok) => ok,
@@ -411,7 +411,6 @@ async fn request_approval(
 
 /// execute_tool runs one tool call against the live mesh link.
 async fn execute_tool(
-    app: &tauri::AppHandle,
     link: &crate::mesh::MeshLink,
     call: &ToolCall,
 ) -> Result<String, String> {

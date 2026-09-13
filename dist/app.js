@@ -3,7 +3,7 @@
 
 const { invoke } = window.__TAURI__.core;
 
-const TAB_KEYS = { c: "chat", t: "teams", m: "mesh", s: "services", r: "realms", l: "apps-local" };
+const TAB_KEYS = { c: "chat", g: "agents", t: "teams", m: "mesh", s: "services", r: "realms", l: "apps-local" };
 
 function selectTab(name) {
   document.querySelectorAll(".tab").forEach((b) => {
@@ -13,6 +13,7 @@ function selectTab(name) {
     p.classList.toggle("hidden", p.id !== `tab-${name}`);
   });
   if (name === "apps-local" || name === "apps-mesh") refreshApps();
+  if (name === "agents") refreshRoster();
 }
 
 document.querySelectorAll(".tab").forEach((b) => {
@@ -471,6 +472,56 @@ document.addEventListener("click", (e) => {
   note.querySelector(".approval-actions").innerHTML =
     '<span class="approval-answered">' + (btn.dataset.approved === "true" ? "approved ✓" : "denied") + "</span>";
 });
+
+// --- agents roster ---------------------------------------------------------
+
+function avatarHue(nodeId) {
+  let h = 0;
+  for (let i = 0; i < nodeId.length; i++) h = (h * 31 + nodeId.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+function agoShort(seconds) {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h`;
+}
+
+async function refreshRoster() {
+  const list = document.getElementById("roster-list");
+  let entries;
+  try {
+    entries = await invoke("roster");
+  } catch (e) {
+    return;
+  }
+  if (!entries || entries.length === 0) {
+    list.innerHTML =
+      '<div class="empty"><div class="title">No agents heard yet</div>' +
+      '<div class="hint">Heartbeats arrive within a minute — agents on the shared mesh appear here, this app included.</div></div>';
+    return;
+  }
+  const now = Date.now();
+  list.innerHTML = entries
+    .map((a) => {
+      const hue = avatarHue(a.nodeId);
+      const seen = agoShort(Math.max(0, Math.floor((now - a.lastSeenMs) / 1000)));
+      const sub = [a.operatorName, a.model].filter(Boolean).join(" · ");
+      return (
+        '<div class="roster-card' + (a.isSelf ? " self" : "") + '">' +
+        '<div class="roster-avatar" style="background:hsl(' + hue + ', 55%, 45%); color:#fff">' +
+        escapeHtml(a.petname.charAt(0).toUpperCase()) +
+        "</div>" +
+        '<div class="roster-info">' +
+        '<div class="roster-name">' + escapeHtml(a.petname) + (a.isSelf ? ' <span class="self-tag">you</span>' : "") + "</div>" +
+        (sub ? '<div class="roster-sub">' + escapeHtml(sub) + "</div>" : "") +
+        '<div class="roster-id">' + escapeHtml(a.nodeId.slice(0, 12)) + "…</div></div>" +
+        '<div class="roster-seen">' + seen + " ago</div>" +
+        "</div>"
+      );
+    })
+    .join("");
+}
 
 // --- titlebar window controls -------------------------------------------
 
