@@ -13,7 +13,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use macula_rust::{
     cbor::Value,
     connection::{self, Session},
-    frame::CallResponse,
+    content,
+    frame::{self, CallResponse},
     identity::KeyPair,
     transport::Trust,
 };
@@ -42,6 +43,12 @@ pub struct Status {
 pub enum MeshCommand {
     /// Call a procedure on the mesh, JSON args in, JSON result out.
     Call { procedure: String, args_json: String },
+    /// Publish a fact to a topic (realm = the zero realm).
+    Publish { topic: String, payload_json: String },
+    /// Store bytes as content; returns the MCID hex.
+    ContentPut { data_b64: String, name: String },
+    /// Fetch content by MCID hex; returns it as text when it is text.
+    ContentGet { mcid_hex: String },
 }
 
 /// MeshLink is the tauri-managed handle to the background mesh thread.
@@ -117,11 +124,23 @@ impl MeshLink {
 
                 // The session lives here, in this loop, until the process
                 // exits: serve commands, one at a time, on the thread that
-                // owns the connection.
+                // owns the connection. `seq` is the per-session publish
+                // sequence: every PublishSpec must carry the next number.
+                let mut seq: u64 = 0;
                 while let Some((cmd, reply_tx)) = rx.recv().await {
                     let result = match cmd {
                         MeshCommand::Call { procedure, args_json } => {
                             mesh_call(&mut session, &identity, &procedure, &args_json).await
+                        }
+                        MeshCommand::Publish { topic, payload_json } => {
+                            seq += 1;
+                            mesh_publish(&mut session, &identity, &topic, &payload_json, seq).await
+                        }
+                        MeshCommand::ContentPut { data_b64, name } => {
+                            mesh_content_put(&mut session, &identity, &data_b64, &name).await
+                        }
+                        MeshCommand::ContentGet { mcid_hex } => {
+                            mesh_content_get(&mut session, &identity, &mcid_hex).await
                         }
                     };
                     let _ = reply_tx.send(result);
@@ -130,6 +149,85 @@ impl MeshLink {
         });
         MeshLink { status, tx }
     }
+}
+
+/// mesh_publish sends one fact to a topic. Fire-and-forget by protocol:
+/// success means the frame went out signed, not that anyone heard.
+async fn mesh_publish(
+    session: &mut Session,
+    identity: &KeyPair,
+    topic: &str,
+    payload_json: &str,
+    seq: u64,
+) -> Result<String, String> {
+    if topic.trim().is_empty() {
+        return Err("publish requires a topic".to_string());
+    }
+    let payload = json_to_cbor(serde_json::from_str::<serde_json::Value>(payload_json).ok())
+        .map_err(|e| format!("invalid payload: {e}"))?;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let spec = frame::PublishSpec::new(topic, [0u8; 32], identity.node_id(), seq, payload, now_ms);
+    session
+        .publish(&spec, identity)
+        .await
+        .map_err(|e| format!("publish failed: {e}"))?;
+    Ok(format!("published to {topic} (seq {seq})"))
+}
+
+/// mesh_content_put stores bytes as content and returns the MCID.
+async fn mesh_content_put(
+    session: &mut Session,
+    identity: &KeyPair,
+    data_b64: &str,
+    name: &str,
+) -> Result<String, String> {
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(data_b64)
+        .map_err(|e| format!("bad base64: {e}"))?;
+    let mcid = content::put(session, &data, name, identity)
+        .await
+        .map_err(|e| format!("content put failed: {e}"))?;
+    Ok(mcid.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// mesh_content_get fetches content by MCID hex; text comes back as
+/// text, anything else reports its size.
+async fn mesh_content_get(
+    session: &mut Session,
+    identity: &KeyPair,
+    mcid_hex: &str,
+) -> Result<String, String> {
+    let bytes = hex_decode(mcid_hex)?;
+    let mut mcid = [0u8; 34];
+    if bytes.len() != 34 {
+        return Err("an MCID is 34 bytes (68 hex chars)".to_string());
+    }
+    mcid.copy_from_slice(&bytes);
+    let data = content::get(session, mcid, identity)
+        .await
+        .map_err(|e| format!("content get failed: {e}"))?;
+    match String::from_utf8(data) {
+        Ok(text) => Ok(text),
+        Err(e) => {
+            let n = e.into_bytes().len();
+            Ok(format!("binary content, {n} bytes"))
+        }
+    }
+}
+
+fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+    let s = s.trim();
+    if s.len() % 2 != 0 {
+        return Err("hex string must have even length".to_string());
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| format!("bad hex: {e}")))
+        .collect()
 }
 
 /// mesh_call invokes one procedure through the live session: JSON args

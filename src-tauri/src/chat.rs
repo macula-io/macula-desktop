@@ -146,6 +146,32 @@ async fn run_tool_loop(
                         link.request(crate::mesh::MeshCommand::Call { procedure, args_json }).await
                     }
                 }
+                "mesh_publish" => {
+                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                        .map_err(|e| format!("bad arguments: {e}"))?;
+                    let topic = args["topic"].as_str().unwrap_or("").to_string();
+                    let payload_json = args["payload_json"].as_str().unwrap_or("").to_string();
+                    link.request(crate::mesh::MeshCommand::Publish { topic, payload_json }).await
+                }
+                "content_get" => {
+                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                        .map_err(|e| format!("bad arguments: {e}"))?;
+                    let mcid_hex = args["mcid"].as_str().unwrap_or("").to_string();
+                    if mcid_hex.is_empty() {
+                        Err("content_get requires an mcid".to_string())
+                    } else {
+                        link.request(crate::mesh::MeshCommand::ContentGet { mcid_hex }).await
+                    }
+                }
+                "content_put" => {
+                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                        .map_err(|e| format!("bad arguments: {e}"))?;
+                    let data = args["data"].as_str().unwrap_or("").to_string();
+                    let name = args["name"].as_str().unwrap_or("").to_string();
+                    use base64::Engine;
+                    let data_b64 = base64::engine::general_purpose::STANDARD.encode(data.as_bytes());
+                    link.request(crate::mesh::MeshCommand::ContentPut { data_b64, name }).await
+                }
                 other => Err(format!("unknown tool {other}")),
             };
             let content = match result {
@@ -266,6 +292,50 @@ static TOOLS: std::sync::LazyLock<Vec<serde_json::Value>> = std::sync::LazyLock:
                         "args_json": { "type": "string", "description": "JSON object of arguments, or empty string." }
                     },
                     "required": ["procedure"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "mesh_publish",
+                "description": "Publish a fact to a mesh topic (fire-and-forget: success means the signed frame went out, not that anyone heard). topic is the topic name; payload_json is a JSON object or value.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": { "type": "string", "description": "The topic to publish to." },
+                        "payload_json": { "type": "string", "description": "JSON payload." }
+                    },
+                    "required": ["topic", "payload_json"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "content_get",
+                "description": "Fetch content-addressed data from the mesh by its MCID (68 hex chars). Text content returns as text; binary content reports its size. Integrity is verified against the MCID itself.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "mcid": { "type": "string", "description": "The 68-hex-char MCID." }
+                    },
+                    "required": ["mcid"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "content_put",
+                "description": "Store text on the mesh as content-addressed data; returns the MCID anyone can later fetch it by.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "data": { "type": "string", "description": "The text to store." },
+                        "name": { "type": "string", "description": "A name attached to chunked manifests; ignored for small content." }
+                    },
+                    "required": ["data"]
                 }
             }
         }),
