@@ -3,7 +3,7 @@
 
 const { invoke } = window.__TAURI__.core;
 
-const TAB_KEYS = { c: "chat", t: "teams", m: "mesh", s: "services", r: "realms" };
+const TAB_KEYS = { c: "chat", t: "teams", m: "mesh", s: "services", r: "realms", l: "apps-local" };
 
 function selectTab(name) {
   document.querySelectorAll(".tab").forEach((b) => {
@@ -12,6 +12,7 @@ function selectTab(name) {
   document.querySelectorAll(".pane").forEach((p) => {
     p.classList.toggle("hidden", p.id !== `tab-${name}`);
   });
+  if (name === "apps-local") refreshLocalApps();
 }
 
 document.querySelectorAll(".tab").forEach((b) => {
@@ -19,18 +20,104 @@ document.querySelectorAll(".tab").forEach((b) => {
 });
 
 // Keyboard-first (same letters as the terminal UI): c/t/m/s/r switch
-// tabs. Ignored while typing in an input, so shortcuts never fight text
-// entry.
+// tabs, l goes to Local Applications, a toggles the Applications
+// section. Ignored while typing in an input, so shortcuts never fight
+// text entry.
 document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.altKey || e.metaKey) return;
   const target = e.target;
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+  if (e.key.toLowerCase() === "a") {
+    openApps();
+    return;
+  }
   const tab = TAB_KEYS[e.key.toLowerCase()];
   if (tab) {
+    if (tab.startsWith("apps-")) openApps();
     selectTab(tab);
     document.querySelector(`.tab[data-tab="${tab}"]`).focus();
   }
 });
+
+// --- Applications section ------------------------------------------------
+
+function openApps() {
+  const shell = document.querySelector(".shell");
+  const collapsed = shell.classList.contains("sidebar-collapsed");
+  if (collapsed) setCollapsed(false);
+  const sub = document.getElementById("apps-sub");
+  const toggle = document.getElementById("apps-toggle");
+  sub.classList.remove("hidden");
+  toggle.classList.add("open");
+}
+
+function toggleApps() {
+  const sub = document.getElementById("apps-sub");
+  const toggle = document.getElementById("apps-toggle");
+  const opening = sub.classList.contains("hidden");
+  sub.classList.toggle("hidden", !opening);
+  toggle.classList.toggle("open", opening);
+  if (opening) refreshLocalApps();
+}
+
+document.getElementById("apps-toggle").addEventListener("click", toggleApps);
+document.getElementById("apps-toggle").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    toggleApps();
+  }
+});
+
+const APP_GLYPH =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/>' +
+  '<rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>';
+
+async function refreshLocalApps() {
+  const list = document.getElementById("app-list");
+  let apps;
+  try {
+    apps = await invoke("local_apps");
+  } catch (e) {
+    list.innerHTML = "";
+    return;
+  }
+  if (!apps || apps.length === 0) {
+    const path = await invoke("config_path_display");
+    list.innerHTML =
+      '<div class="empty">' +
+      '<div class="title">No local applications yet</div>' +
+      '<div class="hint">Declare your LAN admin UIs in <span class="value">' +
+      escapeHtml(path) +
+      "</span> — a JSON file with a <span class=\"value\">local</span> array of " +
+      '<span class="value">{ name, description, url }</span> entries.</div></div>';
+    return;
+  }
+  list.innerHTML = apps
+    .map(
+      (a) =>
+        '<div class="app-card">' +
+        '<div class="app-glyph">' + APP_GLYPH + "</div>" +
+        '<div class="app-info">' +
+        '<div class="app-name">' + escapeHtml(a.name) + "</div>" +
+        '<div class="app-desc">' + escapeHtml(a.description || "") + "</div>" +
+        '<div class="app-url">' + escapeHtml(a.url) + "</div></div>" +
+        '<button class="open-btn" data-url="' + escapeHtml(a.url) + '">' +
+        "Open <span aria-hidden=\"true\">↗</span></button></div>"
+    )
+    .join("");
+  list.querySelectorAll(".open-btn").forEach((btn) => {
+    btn.addEventListener("click", () => invoke("open_external", { url: btn.dataset.url }));
+  });
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
 
 // --- titlebar window controls -------------------------------------------
 

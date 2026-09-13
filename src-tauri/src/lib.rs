@@ -11,6 +11,7 @@
 //! window. Chat/teams/services/realms content comes next; their tabs
 //! state that honestly.
 
+mod apps;
 mod mesh;
 
 use tauri::Manager;
@@ -27,6 +28,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             mesh::mesh_status,
+            apps::local_apps,
+            apps::config_path_display,
+            apps::open_external,
             window_minimize,
             window_toggle_maximize,
             window_close

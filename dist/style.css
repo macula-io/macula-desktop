@@ -208,6 +208,44 @@ body {
   padding: 14px 10px 6px;
 }
 
+/* Applications accordion */
+
+.apps-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.apps-toggle:hover { color: var(--fg); }
+.apps-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.apps-toggle .chevron { margin-left: auto; transition: transform 0.2s var(--ease); }
+.apps-toggle.open .chevron { transform: rotate(90deg); }
+
+.apps-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  max-height: 200px;
+  transition: max-height 0.25s var(--ease), opacity 0.2s var(--ease);
+}
+
+.apps-sub.hidden { max-height: 0; opacity: 0; }
+
+.sub-tab { padding-left: 26px; }
+
+/* collapsed rail: the section becomes an icon button; clicking it
+   expands the sidebar and opens the section */
+.shell.sidebar-collapsed .apps-toggle-label,
+.shell.sidebar-collapsed .apps-toggle .chevron { display: none; }
+.shell.sidebar-collapsed .apps-toggle { justify-content: center; padding: 9px 0; }
+.shell.sidebar-collapsed .apps-sub { display: none; }
+
 .tab {
   appearance: none;
   background: none;
@@ -392,6 +430,72 @@ button.copy {
 }
 button.copy:hover { background: var(--accent-wash); }
 button.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- application cards ---------- */
+
+.app-list { display: flex; flex-direction: column; gap: 12px; }
+
+.app-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  transition: border-color 0.15s var(--ease);
+}
+
+.app-card:hover { border-color: var(--border-strong); }
+
+.app-card .app-glyph {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--accent-wash);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.app-card .app-info { flex: 1; min-width: 0; }
+
+.app-card .app-name { font-weight: 600; font-size: 14px; }
+.app-card .app-desc { color: var(--dim); font-size: 12.5px; margin-top: 1px; }
+.app-card .app-url {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 3px;
+}
+
+.app-card .open-btn {
+  appearance: none;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-raised);
+  color: var(--accent);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.15s var(--ease);
+}
+
+.open-btn:hover { background: var(--accent-wash); }
+.open-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ---------- empty states ---------- */
 
