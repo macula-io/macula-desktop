@@ -402,6 +402,25 @@ listen("chat-error", (e) => {
   assistantBubble = null;
 });
 
+// A tool the agent called on the mesh, rendered as a transparent note
+// between turns -- the operator sees exactly what the agent did.
+listen("chat-tool", (e) => {
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant tool";
+  wrap.innerHTML =
+    '<div class="role">tool</div>' +
+    '<div class="bubble tool-note">' +
+    escapeHtml(e.payload.name) +
+    " → " +
+    '<span class="tool-result">' + escapeHtml(truncate(String(e.payload.result), 200)) + "</span></div>";
+  chatLog.appendChild(wrap);
+  chatLog.scrollTop = chatLog.scrollHeight;
+});
+
+function truncate(s, n) {
+  return s.length <= n ? s : s.slice(0, n) + "…";
+}
+
 listen("chat-done", () => {
   finishAssistant();
 });

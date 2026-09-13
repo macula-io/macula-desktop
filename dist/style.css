@@ -781,6 +781,23 @@ body.app-open .pane { display: none; }
 
 .msg .error-note { color: var(--bad); font-size: 12px; margin-top: 4px; }
 
+.msg .tool-note {
+  background: var(--bg-deep);
+  border-style: dashed;
+  font-size: 12px;
+  color: var(--dim);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.msg .tool-note .tool-result {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+
 .chat-input-row {
   display: flex;
   align-items: flex-end;
