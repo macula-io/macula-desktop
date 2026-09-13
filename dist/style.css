@@ -501,6 +501,9 @@ button.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 
 /* ---------- embedded application view ---------- */
 
+/* Hidden by default; the ID selector's display:flex must not beat the
+   hidden class (specificity), so the hide rule states both. */
+#embedded-app.hidden { display: none; }
 #embedded-app { display: flex; flex-direction: column; height: 100%; }
 
 .embed-toolbar {
