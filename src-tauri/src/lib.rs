@@ -25,7 +25,35 @@ pub fn run() {
             app.manage(mesh_link);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![mesh::mesh_status])
+        .invoke_handler(tauri::generate_handler![
+            mesh::mesh_status,
+            window_minimize,
+            window_toggle_maximize,
+            window_close
+        ])
         .run(tauri::generate_context!())
         .expect("error while running macula-desktop");
+}
+
+// The custom titlebar's three window controls: the webview asks the
+// shell to do window things it is deliberately not allowed to do
+// itself. Same IPC posture as every other command -- registered,
+// narrow, nothing else.
+#[tauri::command]
+fn window_minimize(window: tauri::Window) {
+    window.minimize().ok();
+}
+
+#[tauri::command]
+fn window_toggle_maximize(window: tauri::Window) {
+    if window.is_maximized().unwrap_or(false) {
+        window.unmaximize().ok();
+    } else {
+        window.maximize().ok();
+    }
+}
+
+#[tauri::command]
+fn window_close(window: tauri::Window) {
+    window.close().ok();
 }

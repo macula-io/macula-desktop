@@ -32,6 +32,47 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// --- titlebar window controls -------------------------------------------
+
+document.getElementById("win-min").addEventListener("click", () => invoke("window_minimize"));
+document.getElementById("win-max").addEventListener("click", () => invoke("window_toggle_maximize"));
+document.getElementById("win-close").addEventListener("click", () => invoke("window_close"));
+
+// Double-click on the titlebar = maximize/restore, the platform
+// convention the custom titlebar has to re-implement itself.
+document.querySelector(".titlebar").addEventListener("dblclick", (e) => {
+  if (e.target.closest(".winbtn")) return;
+  invoke("window_toggle_maximize");
+});
+
+// --- sidebar collapse ----------------------------------------------------
+
+function setCollapsed(collapsed) {
+  document.querySelector(".shell").classList.toggle("sidebar-collapsed", collapsed);
+  document.querySelectorAll(".tab").forEach((b) => {
+    b.title = collapsed ? `${b.dataset.tab[0].toUpperCase()}${b.dataset.tab.slice(1)} (${TAB_KEYS_INV[b.dataset.tab]})` : "";
+  });
+}
+
+const TAB_KEYS_INV = { chat: "c", teams: "t", mesh: "m", services: "s", realms: "r" };
+document.querySelectorAll(".tab").forEach((b) => {
+  b.title = `${b.dataset.tab[0].toUpperCase()}${b.dataset.tab.slice(1)} (${TAB_KEYS_INV[b.dataset.tab]})`;
+});
+
+document.getElementById("collapse-btn").addEventListener("click", () => {
+  const shell = document.querySelector(".shell");
+  setCollapsed(!shell.classList.contains("sidebar-collapsed"));
+});
+
+// Ctrl+B: the VS Code convention for the sidebar.
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    const shell = document.querySelector(".shell");
+    setCollapsed(!shell.classList.contains("sidebar-collapsed"));
+  }
+});
+
 // --- mesh status -------------------------------------------------------
 
 function setPill(pill, dot, state, text) {
@@ -74,22 +115,29 @@ async function refreshMesh() {
     const connLabel = document.getElementById("conn-label");
     const connDot = document.getElementById("conn-dot");
     const errorBox = document.getElementById("error");
+    const titlebarStatus = document.getElementById("titlebar-status");
 
     if (s.connected) {
       setPill(status, statusDot, "ok", "connected");
       connLabel.textContent = "connected";
       connDot.className = "dot ok";
+      titlebarStatus.textContent = "connected";
+      titlebarStatus.className = "titlebar-status ok";
       errorBox.classList.add("hidden");
     } else if (s.error) {
       setPill(status, statusDot, "bad", "failed");
       connLabel.textContent = "failed";
       connDot.className = "dot bad";
+      titlebarStatus.textContent = "failed";
+      titlebarStatus.className = "titlebar-status bad";
       errorBox.textContent = s.error;
       errorBox.classList.remove("hidden");
     } else {
       setPill(status, statusDot, "connecting", "connecting…");
       connLabel.textContent = "connecting…";
       connDot.className = "dot connecting";
+      titlebarStatus.textContent = "connecting…";
+      titlebarStatus.className = "titlebar-status connecting";
       errorBox.classList.add("hidden");
     }
   } catch (e) {

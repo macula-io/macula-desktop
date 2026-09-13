@@ -82,7 +82,63 @@ body {
 
 ::selection { background: var(--accent-wash-strong); }
 
-.shell { display: flex; height: 100vh; overflow: hidden; }
+/* ---------- custom titlebar ---------- */
+
+.titlebar {
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 100%;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.titlebar-name { font-weight: 600; letter-spacing: 0.2px; }
+.titlebar-sep { color: var(--faint); }
+
+.titlebar-status {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.titlebar-status.ok { color: var(--ok); }
+.titlebar-status.bad { color: var(--bad); }
+.titlebar-status.connecting { color: var(--warn); }
+
+.titlebar-controls { display: flex; height: 100%; }
+
+.winbtn {
+  appearance: none;
+  background: none;
+  border: none;
+  width: 44px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+.winbtn:hover { background: var(--panel); color: var(--fg); }
+.winbtn-close:hover { background: var(--bad); color: #fff; }
+.winbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.shell { display: flex; height: calc(100vh - 36px); overflow: hidden; }
 
 /* ---------- sidebar ---------- */
 
@@ -95,13 +151,32 @@ body {
   flex-direction: column;
   padding: 16px 12px;
   gap: 2px;
+  transition: width 0.2s var(--ease);
 }
+
+/* Collapsed: icon rail. Labels, kbd hints and the station text hide;
+   the brand keeps its mark and the connection dot moves to the footer
+   alone. */
+.shell.sidebar-collapsed .sidebar { width: 56px; padding: 16px 8px; }
+.shell.sidebar-collapsed .brand-text,
+.shell.sidebar-collapsed .nav-label,
+.shell.sidebar-collapsed .tab-label,
+.shell.sidebar-collapsed .tab kbd,
+.shell.sidebar-collapsed .conn-text { display: none; }
+.shell.sidebar-collapsed .tab { justify-content: center; padding: 9px 0; }
+.shell.sidebar-collapsed .brand { justify-content: center; padding: 2px 0 18px; }
+.shell.sidebar-collapsed .collapse-btn { position: absolute; margin: 0; right: 6px; top: 62px; }
+.shell.sidebar-collapsed .sidebar-footer { justify-content: center; }
+.shell.sidebar-collapsed .sidebar-footer .dot { width: 10px; height: 10px; }
+
+.sidebar { position: relative; }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 2px 10px 18px;
+  position: relative;
 }
 
 .brand svg { flex-shrink: 0; }
@@ -122,6 +197,27 @@ body {
   color: var(--orange);
   margin-top: 1px;
 }
+
+.collapse-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--faint);
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+.collapse-btn:hover { background: var(--panel); color: var(--fg); }
+.collapse-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.shell.sidebar-collapsed .collapse-btn svg { transform: rotate(180deg); }
 
 .nav-label {
   font-size: 10.5px;
