@@ -8,6 +8,7 @@
 //! stays alive until the process exits.
 
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use macula_rust::{
     connection,
@@ -28,6 +29,9 @@ pub struct Status {
     pub node_id: String,
     pub connected: bool,
     pub error: Option<String>,
+    /// Unix ms of the moment the link came up -- lets the UI show a
+    /// live session age without any clock logic in the web layer.
+    pub connected_at_ms: Option<u64>,
 }
 
 /// MeshLink is the tauri-managed handle to the background mesh thread.
@@ -45,6 +49,7 @@ impl MeshLink {
             node_id: String::new(),
             connected: false,
             error: None,
+            connected_at_ms: None,
         }));
         let thread_status = status.clone();
         std::thread::spawn(move || {
@@ -63,6 +68,10 @@ impl MeshLink {
                         {
                             let mut s = thread_status.lock().expect("mesh status lock");
                             s.connected = true;
+                            s.connected_at_ms = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .ok()
+                                .map(|d| d.as_millis() as u64);
                         }
                         // Hold the session forever: park on a pending
                         // future until the process exits.
