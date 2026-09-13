@@ -49,6 +49,8 @@ document.querySelector(".titlebar").addEventListener("dblclick", (e) => {
 
 function setCollapsed(collapsed) {
   document.querySelector(".shell").classList.toggle("sidebar-collapsed", collapsed);
+  const collapseBtn = document.getElementById("collapse-btn");
+  collapseBtn.title = collapsed ? "Expand sidebar (Ctrl+B)" : "Collapse sidebar (Ctrl+B)";
   document.querySelectorAll(".tab").forEach((b) => {
     b.title = collapsed ? `${b.dataset.tab[0].toUpperCase()}${b.dataset.tab.slice(1)} (${TAB_KEYS_INV[b.dataset.tab]})` : "";
   });

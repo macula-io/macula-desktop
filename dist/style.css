@@ -165,7 +165,17 @@ body {
 .shell.sidebar-collapsed .conn-text { display: none; }
 .shell.sidebar-collapsed .tab { justify-content: center; padding: 9px 0; }
 .shell.sidebar-collapsed .brand { justify-content: center; padding: 2px 0 18px; }
-.shell.sidebar-collapsed .collapse-btn { position: absolute; margin: 0; right: 6px; top: 62px; }
+.shell.sidebar-collapsed .collapse-btn {
+  position: absolute;
+  right: auto;
+  top: auto;
+  bottom: 68px; /* above the connection dot, the rail's only other content */
+  left: 50%;
+  transform: translateX(-50%) rotate(180deg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.shell.sidebar-collapsed .collapse-btn:hover { background: var(--accent-wash); color: var(--accent); }
 .shell.sidebar-collapsed .sidebar-footer { justify-content: center; }
 .shell.sidebar-collapsed .sidebar-footer .dot { width: 10px; height: 10px; }
 
@@ -217,7 +227,7 @@ body {
 .collapse-btn:hover { background: var(--panel); color: var(--fg); }
 .collapse-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.shell.sidebar-collapsed .collapse-btn svg { transform: rotate(180deg); }
+.collapse-btn svg { transition: transform 0.2s var(--ease); }
 
 .nav-label {
   font-size: 10.5px;
