@@ -121,6 +121,20 @@
     </nav>
 
     <main class="content">
+      <div id="embedded-app" class="hidden">
+        <div class="embed-toolbar">
+          <button class="toolbar-btn" id="embed-back" title="Back to applications (Esc)">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9.5 2.5 4.5 7 9.5 11.5"/></svg>
+            Applications
+          </button>
+          <div class="embed-title" id="embed-title">—</div>
+          <div class="embed-url" id="embed-url">—</div>
+          <button class="toolbar-btn" id="embed-reload" title="Reload">Reload</button>
+          <button class="toolbar-btn" id="embed-external" title="Open in system browser">Open in browser ↗</button>
+        </div>
+        <iframe id="embed-frame" title="Application" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"></iframe>
+      </div>
+
       <section id="tab-mesh" class="pane">
         <div class="pane-title">
           <h1>Mesh</h1>
@@ -248,9 +262,10 @@
         <div class="pane-title"><h1>Local Applications</h1><span class="sub">admin UIs on your LAN</span></div>
         <p class="pane-desc">
           Hecate services running on your edge boxes expose plain-HTTP admin
-          UIs to the LAN. Declare them in <span class="value" id="apps-config-path">the config file</span>
-          and they appear here; opening one hands the URL to your system
-          browser — the app itself never fetches it.
+          UIs to the LAN.           Declare them in <span class="value" id="apps-config-path">the config file</span>
+          and they appear here; clicking one embeds its UI right here in the
+          content panel (the sidebar stays), with the system browser one click
+          away for anything that refuses to be embedded.
         </p>
         <div class="app-list" id="app-list"></div>
       </section>

@@ -96,7 +96,7 @@ async function refreshLocalApps() {
   list.innerHTML = apps
     .map(
       (a) =>
-        '<div class="app-card">' +
+        '<div class="app-card app-openable" data-url="' + escapeHtml(a.url) + '" data-name="' + escapeHtml(a.name) + '">' +
         '<div class="app-glyph">' + APP_GLYPH + "</div>" +
         '<div class="app-info">' +
         '<div class="app-name">' + escapeHtml(a.name) + "</div>" +
@@ -107,9 +107,52 @@ async function refreshLocalApps() {
     )
     .join("");
   list.querySelectorAll(".open-btn").forEach((btn) => {
-    btn.addEventListener("click", () => invoke("open_external", { url: btn.dataset.url }));
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      invoke("open_external", { url: btn.dataset.url });
+    });
+  });
+  list.querySelectorAll(".app-openable").forEach((card) => {
+    card.addEventListener("click", () => openEmbedded(card.dataset.name, card.dataset.url));
   });
 }
+
+// --- embedded application view -------------------------------------------
+
+let embeddedUrl = "";
+
+function openEmbedded(name, url) {
+  embeddedUrl = url;
+  document.getElementById("embed-title").textContent = name;
+  document.getElementById("embed-url").textContent = url;
+  document.getElementById("embed-frame").src = url;
+  document.body.classList.add("app-open");
+  document.getElementById("embedded-app").classList.remove("hidden");
+}
+
+function closeEmbedded() {
+  document.body.classList.remove("app-open");
+  document.getElementById("embedded-app").classList.add("hidden");
+  document.getElementById("embed-frame").src = "about:blank";
+  embeddedUrl = "";
+}
+
+document.getElementById("embed-back").addEventListener("click", closeEmbedded);
+document.getElementById("embed-reload").addEventListener("click", () => {
+  const frame = document.getElementById("embed-frame");
+  frame.src = embeddedUrl;
+});
+document.getElementById("embed-external").addEventListener("click", () => {
+  if (embeddedUrl) invoke("open_external", { url: embeddedUrl });
+});
+
+// Esc leaves the embedded app first (if one is open), before anything
+// else claims the key.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("app-open")) {
+    closeEmbedded();
+  }
+});
 
 function escapeHtml(s) {
   return String(s)

@@ -449,6 +449,8 @@ button.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 
 .app-card:hover { border-color: var(--border-strong); }
 
+.app-card.app-openable { cursor: pointer; }
+
 .app-card .app-glyph {
   width: 36px;
   height: 36px;
@@ -496,6 +498,63 @@ button.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 
 .open-btn:hover { background: var(--accent-wash); }
 .open-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- embedded application view ---------- */
+
+#embedded-app { display: flex; flex-direction: column; height: 100%; }
+
+.embed-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+
+.toolbar-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-raised);
+  color: var(--dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.toolbar-btn:hover { background: var(--accent-wash); color: var(--accent); }
+.toolbar-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.embed-title { font-weight: 600; font-size: 13px; }
+
+.embed-url {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#embed-external { margin-left: auto; }
+
+#embed-frame {
+  flex: 1;
+  min-height: 0;
+  border: none;
+  background: #fff;
+  color-scheme: light;
+}
+
+body.app-open .content { padding: 0; overflow: hidden; }
+body.app-open .pane { display: none; }
 
 /* ---------- empty states ---------- */
 
