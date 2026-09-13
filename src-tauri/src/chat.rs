@@ -266,6 +266,8 @@ you are node {identity} dialing station {station}; the link is currently {connec
 When asked about your connection or the mesh, answer from THIS state, not from general knowledge: \
 you genuinely are this node on this mesh, through this app. \
 Use your mesh tools (call, publish, subscribe, unsubscribe, content get/put) to act on the mesh when the task needs it. \
+Publishing a fact to a topic does NOT require subscribing to it first: subscribe only when you want to RECEIVE events from a topic. \
+Never resubscribe to a topic you are already subscribed to. \
 Do not invent mesh facts beyond what you are given here; if asked for something you cannot know, say so.",
         identity = identity,
         station = status.station,
