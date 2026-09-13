@@ -115,6 +115,9 @@ pub enum MeshCommand {
     JoinRoom { topic: String, purpose: String },
     /// Leave a room: unsubscribe and drop local tracking.
     LeaveRoom { topic: String },
+    /// Switch the operating realm: resubscribes presence and the
+    /// lobby under the new tag and clears realm-scoped state.
+    SetRealm { tag: [u8; 32] },
     /// Store bytes as content; returns the MCID hex.
     ContentPut { data_b64: String, name: String },
     /// Fetch content by MCID hex; returns it as text when it is text.
@@ -136,6 +139,8 @@ pub struct MeshLink {
     public_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>>,
     /// Rooms this app joined, keyed by topic, with recent messages.
     joined_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
+    /// help broadcasts from the lobby, newest last, capped.
+    help: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
 }
 
 impl MeshLink {
@@ -250,6 +255,9 @@ impl MeshLink {
         let joined_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>> =
             std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
         let thread_joined_rooms = joined_rooms.clone();
+        let help: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>> =
+            std::sync::Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let thread_help = help.clone();
         std::thread::spawn(move || {
             let runtime =
                 tokio::runtime::Runtime::new().expect("build tokio runtime for the mesh link");
@@ -296,9 +304,10 @@ impl MeshLink {
                 // shared hello topic once, beat our own heart every
                 // minute, and fold every hello heard into the roster.
                 let mut seq: u64 = 0;
-                let hello_spec = frame::SubscribeSpec::new(HELLO_TOPIC, [0u8; 32], identity.node_id());
+                let mut current_realm: [u8; 32] = [0u8; 32];
+                let hello_spec = frame::SubscribeSpec::new(HELLO_TOPIC, current_realm, identity.node_id());
                 let _ = session.subscribe(&hello_spec, &identity).await;
-                let lobby_spec = frame::SubscribeSpec::new(LOBBY_TOPIC, [0u8; 32], identity.node_id());
+                let lobby_spec = frame::SubscribeSpec::new(LOBBY_TOPIC, current_realm, identity.node_id());
                 let _ = session.subscribe(&lobby_spec, &identity).await;
                 let own_node = hex(&identity.node_id());
                 let own_petname = crate::petname::petname(&own_node);
@@ -321,10 +330,26 @@ impl MeshLink {
                                     mesh_unsubscribe(&mut session, &identity, &topic).await
                                 }
                                 MeshCommand::JoinRoom { topic, purpose } => {
-                                    join_room_command(&mut session, &identity, &topic, &purpose, &thread_joined_rooms).await
+                                    join_room_command(&mut session, &identity, &topic, &purpose, current_realm, &thread_joined_rooms).await
                                 }
                                 MeshCommand::LeaveRoom { topic } => {
-                                    leave_room_command(&mut session, &identity, &topic, &thread_joined_rooms).await
+                                    leave_room_command(&mut session, &identity, &topic, current_realm, &thread_joined_rooms).await
+                                }
+                                MeshCommand::SetRealm { tag } => {
+                                    let old_hello = frame::UnsubscribeSpec::new(HELLO_TOPIC, current_realm, identity.node_id());
+                                    let old_lobby = frame::UnsubscribeSpec::new(LOBBY_TOPIC, current_realm, identity.node_id());
+                                    let _ = session.unsubscribe(&old_hello, &identity).await;
+                                    let _ = session.unsubscribe(&old_lobby, &identity).await;
+                                    let hello_spec = frame::SubscribeSpec::new(HELLO_TOPIC, tag, identity.node_id());
+                                    let lobby_spec = frame::SubscribeSpec::new(LOBBY_TOPIC, tag, identity.node_id());
+                                    let _ = session.subscribe(&hello_spec, &identity).await;
+                                    let _ = session.subscribe(&lobby_spec, &identity).await;
+                                    current_realm = tag;
+                                    thread_roster.lock().expect("roster lock").clear();
+                                    thread_public_rooms.lock().expect("public rooms lock").clear();
+                                    thread_joined_rooms.lock().expect("joined rooms lock").clear();
+                                    thread_events.lock().expect("mesh events lock").clear();
+                                    Ok(format!("operating realm switched (tag {})", hex(&current_realm)))
                                 }
                                 MeshCommand::ContentPut { data_b64, name } => {
                                     mesh_content_put(&mut session, &identity, &data_b64, &name).await
@@ -351,13 +376,20 @@ impl MeshLink {
                             })))
                             .unwrap_or(Value::Null);
                             let spec = frame::PublishSpec::new(
-                                HELLO_TOPIC, [0u8; 32], identity.node_id(), seq, payload, now_ms,
+                                HELLO_TOPIC, current_realm, identity.node_id(), seq, payload, now_ms,
                             );
                             let _ = session.publish(&spec, &identity).await;
                         }
                         delivery = session.recv_event(Duration::from_secs(3600)) => {
                             if let Ok(info) = delivery {
-                                route_event(&info, &app, &own_node, &thread_roster, &thread_public_rooms, &thread_joined_rooms, &thread_events);
+                                let stores = EventStores {
+                                    roster: thread_roster.clone(),
+                                    public_rooms: thread_public_rooms.clone(),
+                                    joined: thread_joined_rooms.clone(),
+                                    events: thread_events.clone(),
+                                    help: thread_help.clone(),
+                                };
+                                route_event(&info, &app, &own_node, &stores);
                             }
                         }
                         else => break,
@@ -372,6 +404,7 @@ impl MeshLink {
             roster,
             public_rooms,
             joined_rooms,
+            help,
         }
     }
 }
@@ -382,9 +415,10 @@ async fn join_room_command(
     identity: &KeyPair,
     topic: &str,
     purpose: &str,
+    realm: [u8; 32],
     joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
 ) -> Result<String, String> {
-    let spec = frame::SubscribeSpec::new(topic, [0u8; 32], identity.node_id());
+    let spec = frame::SubscribeSpec::new(topic, realm, identity.node_id());
     session
         .subscribe(&spec, identity)
         .await
@@ -406,15 +440,26 @@ async fn leave_room_command(
     session: &mut Session,
     identity: &KeyPair,
     topic: &str,
+    realm: [u8; 32],
     joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
 ) -> Result<String, String> {
-    let spec = frame::UnsubscribeSpec::new(topic, [0u8; 32], identity.node_id());
+    let spec = frame::UnsubscribeSpec::new(topic, realm, identity.node_id());
     session
         .unsubscribe(&spec, identity)
         .await
         .map_err(|e| format!("leave failed: {e}"))?;
     joined.lock().expect("joined rooms lock").remove(topic);
     Ok(format!("left room {topic}"))
+}
+
+/// EventStores bundles the mesh thread's realm-scoped stores so the
+/// routing functions take one context instead of five arguments.
+pub struct EventStores {
+    pub roster: std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>>,
+    pub public_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>>,
+    pub joined: std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
+    pub events: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
+    pub help: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
 }
 
 /// route_event sends one delivery to its one true store: lobby
@@ -424,50 +469,63 @@ fn route_event(
     info: &frame::EventInfo,
     app: &tauri::AppHandle,
     own_node: &str,
-    roster: &std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>>,
-    public_rooms: &std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>>,
-    joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
-    events: &std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
+    stores: &EventStores,
 ) {
     let publisher = hex(&info.publisher);
     if info.topic == LOBBY_TOPIC {
-        note_public_room(info, &publisher, public_rooms);
+        note_lobby(info, &publisher, &stores.public_rooms, &stores.help);
         return;
     }
     if info.topic.starts_with("agents.room.") {
-        note_room_message(info, &publisher, joined);
+        note_room_message(info, &publisher, &stores.joined);
         return;
     }
     if info.topic == HELLO_TOPIC {
-        note_roster_entry(info, &publisher, own_node, roster);
+        note_roster_entry(info, &publisher, own_node, &stores.roster);
         return;
     }
-    note_chat_event(info, &publisher, events, app);
+    note_chat_event(info, &publisher, &stores.events, app);
 }
 
-/// note_public_room records a room_opened announcement from central.
-fn note_public_room(
+/// note_lobby handles central traffic: room_opened announcements go to
+/// the public-rooms list, help broadcasts to the help store.
+fn note_lobby(
     info: &frame::EventInfo,
     publisher: &str,
     public_rooms: &std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>>,
+    help: &std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
 ) {
     let payload = event_json(info);
-    if payload["kind"].as_str() != Some("room_opened") {
+    let kind = payload["kind"].as_str().unwrap_or("");
+    if kind == "room_opened" {
+        let topic = payload["room_topic"].as_str().unwrap_or("").to_string();
+        if topic.is_empty() {
+            return;
+        }
+        public_rooms.lock().expect("public rooms lock").insert(
+            topic.clone(),
+            PublicRoom {
+                purpose: payload["purpose"].as_str().unwrap_or("").to_string(),
+                topic,
+                opened_by_petname: crate::petname::petname(publisher),
+                seen_at_ms: now_ms(),
+            },
+        );
         return;
     }
-    let topic = payload["room_topic"].as_str().unwrap_or("").to_string();
-    if topic.is_empty() {
-        return;
+    if kind == "help_requested" || kind == "help_offered" {
+        let event = MeshEvent {
+            topic: info.topic.clone(),
+            payload: event_payload(info),
+            publisher: publisher.to_string(),
+            seq: info.seq,
+        };
+        let mut q = help.lock().expect("help lock");
+        q.push_back(event);
+        while q.len() > 20 {
+            q.pop_front();
+        }
     }
-    public_rooms.lock().expect("public rooms lock").insert(
-        topic.clone(),
-        PublicRoom {
-            purpose: payload["purpose"].as_str().unwrap_or("").to_string(),
-            topic,
-            opened_by_petname: crate::petname::petname(publisher),
-            seen_at_ms: now_ms(),
-        },
-    );
 }
 
 /// note_room_message appends one delivery to its joined room.
@@ -790,6 +848,21 @@ fn cbor_to_json(v: &Value) -> Result<String, String> {
 #[tauri::command]
 pub fn mesh_status(link: tauri::State<'_, MeshLink>) -> Status {
     link.status.lock().expect("mesh status lock").clone()
+}
+
+/// teams_board_command derives the team board from the joined rooms
+/// and the lobby's help broadcasts.
+#[tauri::command]
+pub fn teams_board_command(link: tauri::State<'_, MeshLink>) -> crate::teams::TeamBoard {
+    let joined = link.joined_rooms();
+    let help: Vec<MeshEvent> = link
+        .help
+        .lock()
+        .expect("help lock")
+        .iter()
+        .cloned()
+        .collect();
+    crate::teams::board(&joined, &help)
 }
 
 /// roster is the presence list, most recently seen first, self marked.

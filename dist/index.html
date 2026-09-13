@@ -185,6 +185,26 @@
           </div>
 
           <div class="card">
+            <div class="card-head">Operating realm</div>
+            <div class="card-body">
+              <div class="kv">
+                <div class="row">
+                  <span class="label">Name</span>
+                  <input id="realm-name" type="text" class="realm-input wide" placeholder="io.macula" title="The realm this app operates in. The wire tag derives from the name -- sha256(name) hex, uppercased -- exactly like macula_realm:id/1." autocomplete="off" />
+                </div>
+                <div class="row stack">
+                  <span class="label">Tag</span>
+                  <span class="value" id="realm-tag">—</span>
+                </div>
+                <div class="row">
+                  <span class="label">Apply</span>
+                  <button class="copy" id="realm-apply">apply realm</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
             <div class="card-head">Identity</div>
             <div class="card-body">
               <div class="kv">
@@ -219,7 +239,7 @@
           <label class="form-check autoreact" title="Recall relevant memory from the mesh each turn and remember short outcome summaries. Memory is shared -- enable only if you want this agent's knowledge on the mesh.">
             <input id="memory-toggle" type="checkbox" /> mesh memory
           </label>
-          <input id="memory-realm" type="text" class="realm-input hidden" placeholder="realm tag (64 hex)" title="The realm memory operates in. Memory is gated by realm context: it stays off without a valid 64-hex realm tag." autocomplete="off" />
+
         </div>
         <div class="chat-wrap">
           <div class="chat-log" id="chat-log">
@@ -272,18 +292,11 @@
 
       <section id="tab-teams" class="pane hidden">
         <div class="pane-title"><h1>Teams</h1><span class="sub">who is working on what</span></div>
-        <div class="empty">
-          <svg width="40" height="40" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="6" cy="5" r="2.2"/><circle cx="11" cy="7" r="2.2"/>
-            <path d="M2 13c0-2.2 1.8-3.5 4-3.5s4 1.3 4 3.5M9.5 9.8c1.5.3 2.9 1.2 2.9 3.2"/>
-          </svg>
-          <div class="title">The team board is next</div>
-          <div class="hint">
-            Open lanes, open handoffs, recent results, help broadcasts and the
-            roster — derived in the Rust core from the mesh's own message kinds,
-            per the team-coordination exploration.
-          </div>
-        </div>
+        <p class="pane-desc">
+          Derived from the mesh's own message kinds in the rooms you joined and
+          the lobby's help broadcasts — scoped to the operating realm.
+        </p>
+        <div class="team-sections" id="team-sections"></div>
       </section>
 
       <section id="tab-services" class="pane hidden">

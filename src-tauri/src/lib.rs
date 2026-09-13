@@ -15,6 +15,7 @@ mod apps;
 mod chat;
 mod mesh;
 mod petname;
+mod teams;
 
 use tauri::Manager;
 
@@ -36,6 +37,7 @@ pub fn run() {
             mesh::mesh_status,
             mesh::roster,
             mesh::public_rooms_command,
+            mesh::teams_board_command,
             mesh::joined_rooms_command,
             mesh::join_room,
             mesh::leave_room,
@@ -44,6 +46,7 @@ pub fn run() {
             chat::set_chat_settings,
             chat::approve_tool,
             chat::set_chat_approve_all,
+            chat::set_realm,
             chat::chat_interrupt,
             apps::apps_config,
             apps::save_apps,

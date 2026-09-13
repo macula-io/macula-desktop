@@ -968,6 +968,23 @@ body.app-open .pane { display: none; }
 
 .roster-seen { font-family: var(--mono); font-size: 11px; color: var(--faint); flex-shrink: 0; }
 
+/* ---------- teams ---------- */
+
+.team-sections { display: flex; flex-direction: column; gap: 8px; }
+
+.team-row {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  font-size: 12.5px;
+  margin-bottom: 6px;
+}
+
+.team-who { font-weight: 600; color: var(--accent); }
+.team-text { color: var(--fg); }
+.team-room { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-left: 6px; }
+
 /* ---------- rooms ---------- */
 
 .rooms-section { margin-bottom: 20px; }

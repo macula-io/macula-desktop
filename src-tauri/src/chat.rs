@@ -62,8 +62,8 @@ pub struct ChatState {
     pub approve_all: std::sync::Mutex<bool>,
     /// memory: recall/remember against hecate-rag (see Settings).
     pub memory: std::sync::Mutex<bool>,
-    /// memory_realm: the realm tag memory calls carry (64 hex chars).
-    pub memory_realm: std::sync::Mutex<String>,
+    /// realm: the operating realm name; its tag derives via sha256.
+    pub realm: std::sync::Mutex<String>,
     /// interrupt: the operator asked to stop the current turn; the
     /// stream loop checks it between chunks.
     pub interrupt: std::sync::atomic::AtomicBool,
@@ -78,7 +78,7 @@ impl Default for ChatState {
             pending_approvals: std::sync::Mutex::new(std::collections::HashMap::new()),
             approve_all: std::sync::Mutex::new(false),
             memory: std::sync::Mutex::new(false),
-            memory_realm: std::sync::Mutex::new(String::new()),
+            realm: std::sync::Mutex::new(String::new()),
             interrupt: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -122,6 +122,50 @@ pub fn set_chat_approve_all(state: tauri::State<'_, ChatState>) -> Result<(), St
     Ok(())
 }
 
+/// set_realm switches the app's operating realm: the name is stored
+/// (and persisted with the other settings), and the mesh thread is
+/// asked to resubscribe presence and the lobby under the derived tag.
+#[tauri::command]
+pub async fn set_realm(
+    state: tauri::State<'_, ChatState>,
+    link: tauri::State<'_, crate::mesh::MeshLink>,
+    name: String,
+) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("realm name may not be empty".to_string());
+    }
+    let tag = realm_tag(&name);
+    link.request(crate::mesh::MeshCommand::SetRealm { tag })
+        .await
+        .map_err(|e| format!("mesh realm switch failed: {e}"))?;
+    *state.realm.lock().expect("chat policy lock") = name.clone();
+    // Memory follows the realm: it stays on only when a realm exists.
+    let memory = *state.memory.lock().expect("chat policy lock");
+    let auto_react = *state.auto_react.lock().expect("chat policy lock");
+    persist_settings(Settings {
+        auto_react,
+        memory,
+        realm: name,
+    })
+}
+
+/// persist_settings writes the settings file atomically.
+fn persist_settings(settings: Settings) -> Result<(), String> {
+    let Some(path) = settings_path() else {
+        return Err("no config directory could be determined".to_string());
+    };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create config directory: {e}"))?;
+    }
+    let text =
+        serde_json::to_string_pretty(&settings).map_err(|e| format!("encode settings: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("write settings: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("commit settings: {e}"))?;
+    Ok(())
+}
+
 /// chat_interrupt asks the running turn to stop: the stream loop
 /// checks the flag between chunks and ends the turn with a note.
 #[tauri::command]
@@ -144,11 +188,12 @@ pub struct Settings {
     /// written without the operator turning this on.
     #[serde(default)]
     pub memory: bool,
-    /// memory_realm: the realm memory operates in (64 hex chars).
-    /// Memory is GATED by realm context: without a valid realm the
-    /// memory flag is inert, never silently zero-realm.
+    /// realm: the app's operating realm, a NAME ("io.macula"), not a
+    /// hex tag -- the tag is derived client-side, sha256(name) hex
+    /// uppercased (macula_realm:id/1's exact layout). Memory and the
+    /// teams board are gated by it: no realm, no realm-scoped work.
     #[serde(default)]
-    pub memory_realm: String,
+    pub realm: String,
 }
 
 /// transcript_path is the append-only conversation log:
@@ -235,24 +280,6 @@ fn settings_path() -> Option<PathBuf> {
     Some(path)
 }
 
-/// parse_realm validates a 64-hex-char realm tag into its 32 bytes.
-fn parse_realm(hex: &str) -> Result<Option<[u8; 32]>, String> {
-    let hex = hex.trim();
-    if hex.is_empty() {
-        return Ok(None);
-    }
-    let bytes = (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| format!("bad realm hex: {e}")))
-        .collect::<Result<Vec<u8>, String>>()?;
-    let mut out = [0u8; 32];
-    if bytes.len() != 32 {
-        return Err("a realm tag is 64 hex chars (32 bytes)".to_string());
-    }
-    out.copy_from_slice(&bytes);
-    Ok(Some(out))
-}
-
 /// chat_settings returns the persisted policy (defaults when absent).
 #[tauri::command]
 pub fn chat_settings() -> Settings {
@@ -262,30 +289,31 @@ pub fn chat_settings() -> Settings {
         .unwrap_or(Settings {
             auto_react: false,
             memory: false,
-            memory_realm: String::new(),
+            realm: String::new(),
         })
 }
 
 /// set_chat_settings persists the policy and applies it immediately:
-/// the reactor reads this same value for every event.
+/// the reactor reads this same value for every event. Memory is gated
+/// by the operating realm: a non-empty realm NAME is required.
 #[tauri::command]
 pub fn set_chat_settings(
     state: tauri::State<'_, ChatState>,
     auto_react: bool,
     memory: bool,
-    memory_realm: String,
+    realm: String,
 ) -> Result<(), String> {
     *state.auto_react.lock().expect("chat policy lock") = auto_react;
-    let realm = parse_realm(&memory_realm)?;
-    let effective = memory && realm.is_some();
-    if memory && realm.is_none() {
+    let realm_name = realm.trim().to_string();
+    let effective = memory && !realm_name.is_empty();
+    if memory && realm_name.is_empty() {
         return Err(
-            "mesh memory requires a realm: a 64-hex-char realm tag (it is never silently zero-realm)"
+            "mesh memory is gated by the operating realm: set a realm first (never silently zero-realm)"
                 .to_string(),
         );
     }
     *state.memory.lock().expect("chat policy lock") = effective;
-    *state.memory_realm.lock().expect("chat policy lock") = memory_realm.clone();
+    *state.realm.lock().expect("chat policy lock") = realm_name.clone();
     let Some(path) = settings_path() else {
         return Err("no config directory could be determined".to_string());
     };
@@ -295,7 +323,7 @@ pub fn set_chat_settings(
     let text = serde_json::to_string_pretty(&Settings {
         auto_react,
         memory,
-        memory_realm: memory_realm.clone(),
+        realm: realm_name,
     })
     .map_err(|e| format!("encode settings: {e}"))?;
     let tmp = path.with_extension("json.tmp");
@@ -370,12 +398,25 @@ fn run_user_turn(app: tauri::AppHandle) {
     });
 }
 
-/// memory_realm resolves the configured realm tag to its bytes. The
-/// value is validated on save, so a failure here means the operator
-/// edited the file by hand -- memory simply stays gated off.
+/// memory_realm derives the operating realm's tag from its NAME:
+/// sha256(name) hex, uppercased -- macula_realm:id/1's exact layout,
+/// the same derivation macula-mcp uses. An empty realm name gates
+/// memory off, never silently zero-realm.
 fn memory_realm(state: &ChatState) -> [u8; 32] {
-    let hex = state.memory_realm.lock().expect("chat policy lock").clone();
-    parse_realm(&hex).ok().flatten().unwrap_or([0u8; 32])
+    let name = state.realm.lock().expect("chat policy lock").clone();
+    realm_tag(&name)
+}
+
+/// realm_tag is the wire-level realm for a realm NAME. Pure.
+pub fn realm_tag(name: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    if name.trim().is_empty() {
+        return [0u8; 32];
+    }
+    let digest = Sha256::digest(name.as_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
 }
 
 /// last_user_message is the newest operator turn, the memory query.

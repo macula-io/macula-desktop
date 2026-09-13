@@ -15,6 +15,7 @@ function selectTab(name) {
   if (name === "apps-local" || name === "apps-mesh") refreshApps();
   if (name === "agents") refreshRoster();
   if (name === "rooms") refreshRooms();
+  if (name === "teams") refreshTeams();
 }
 
 document.querySelectorAll(".tab").forEach((b) => {
@@ -470,25 +471,18 @@ document.getElementById("autoreact-toggle").addEventListener("change", () => {
   syncChatSettings();
 });
 document.getElementById("memory-toggle").addEventListener("change", () => {
-  const on = document.getElementById("memory-toggle").checked;
-  const realmInput = document.getElementById("memory-realm");
-  realmInput.classList.toggle("hidden", !on);
-  if (on) realmInput.focus();
   syncChatSettings();
 });
-document.getElementById("memory-realm").addEventListener("change", () => syncChatSettings());
 
 function syncChatSettings() {
-  const realm = document.getElementById("memory-realm").value.trim();
   invoke("set_chat_settings", {
     autoReact: document.getElementById("autoreact-toggle").checked,
     memory: document.getElementById("memory-toggle").checked,
-    memoryRealm: realm,
   }).catch((e) => {
-    // The most likely cause: memory on without a valid realm -- which
-    // is exactly the gate, so un-check rather than fail silently.
+    // The most likely cause: memory on while no operating realm is
+    // set -- which is exactly the gate, so un-check rather than fail
+    // silently.
     document.getElementById("memory-toggle").checked = false;
-    document.getElementById("memory-realm").classList.add("hidden");
     console.warn("chat settings rejected:", e);
   });
 }
@@ -663,6 +657,44 @@ function renderJoinedRooms(joined) {
   });
 }
 
+// --- teams board -----------------------------------------------------------
+
+function teamSection(title, items, noun) {
+  if (!items || items.length === 0) return "";
+  const rows = items
+    .map((it) => {
+      const who = it.petname || it.who.slice(0, 12) + "…";
+      return (
+        '<div class="team-row">' +
+        '<span class="team-who">' + escapeHtml(who) + "</span> " +
+        '<span class="team-text">' + escapeHtml(truncate(it.text, 160)) + "</span>" +
+        (it.room ? '<span class="team-room">' + escapeHtml(it.room) + "</span>" : "") +
+        "</div>"
+      );
+    })
+    .join("");
+  return '<div class="rooms-section"><div class="rooms-section-head">' + title + " (" + items.length + ")</div>" + rows + "</div>";
+}
+
+async function refreshTeams() {
+  const el = document.getElementById("team-sections");
+  let board;
+  try {
+    board = await invoke("teams_board_command");
+  } catch (e) {
+    return;
+  }
+  const sections = [
+    teamSection("Open lanes", board.openLanes),
+    teamSection("Open handoffs", board.openHandoffs),
+    teamSection("Recent results", board.recentResults),
+    teamSection("Help", board.help),
+  ].join("");
+  el.innerHTML =
+    sections ||
+    '<div class="empty small"><div class="hint">No team activity in this realm yet — lanes, handoffs and help requests appear here as they happen in your joined rooms and on the lobby.</div></div>';
+}
+
 // --- titlebar window controls -------------------------------------------
 
 document.getElementById("win-min").addEventListener("click", () => invoke("window_minimize"));
@@ -788,6 +820,28 @@ function tickUptime() {
   document.getElementById("uptime").textContent = fmtUptime(elapsed);
 }
 
+async function sha256HexUpper(s) {
+  const bytes = new TextEncoder().encode(s);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+document.getElementById("realm-name").addEventListener("input", async () => {
+  const name = document.getElementById("realm-name").value.trim();
+  document.getElementById("realm-tag").textContent = name ? await sha256HexUpper(name) : "—";
+});
+
+document.getElementById("realm-apply").addEventListener("click", async () => {
+  const name = document.getElementById("realm-name").value.trim();
+  try {
+    await invoke("set_realm", { name });
+    document.getElementById("realm-apply").textContent = "applied ✓";
+    setTimeout(() => (document.getElementById("realm-apply").textContent = "apply realm"), 1500);
+  } catch (e) {
+    document.getElementById("realm-apply").textContent = "failed: " + e;
+  }
+});
+
 document.getElementById("copy-node").addEventListener("click", async () => {
   if (!nodeId) return;
   await navigator.clipboard.writeText(nodeId);
@@ -804,7 +858,7 @@ setInterval(refreshMesh, 2000);
   const s = await invoke("chat_settings");
   document.getElementById("autoreact-toggle").checked = s.autoReact;
   document.getElementById("memory-toggle").checked = s.memory;
-  document.getElementById("memory-realm").value = s.memoryRealm || "";
-  document.getElementById("memory-realm").classList.toggle("hidden", !s.memory);
+  document.getElementById("realm-name").value = s.realm || "";
+  if (s.realm) document.getElementById("realm-tag").textContent = await sha256HexUpper(s.realm);
 })();
 setInterval(tickUptime, 1000);
