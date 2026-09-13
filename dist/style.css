@@ -588,6 +588,40 @@ button.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 
 .form-error { color: var(--bad); font-size: 12.5px; }
 
+.form-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--dim);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.form-check input { accent-color: var(--accent); }
+
+/* per-card sandbox toggle */
+
+.sandbox-toggle {
+  appearance: none;
+  flex-shrink: 0;
+  background: var(--panel-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.sandbox-toggle.trusted { color: var(--ok); }
+.sandbox-toggle.sandboxed { color: var(--faint); }
+.sandbox-toggle:hover { background: var(--accent-wash); }
+.sandbox-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* ---------- embedded application view ---------- */
 
 /* Hidden by default; the ID selector's display:flex must not beat the

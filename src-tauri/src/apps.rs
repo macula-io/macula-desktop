@@ -9,23 +9,35 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// LocalApp is one LAN application entry: what it is and where its
-/// admin UI lives.
+/// admin UI lives. `sandboxed` embeds the UI in a sandboxed frame --
+/// WebKit gives such frames an ephemeral session, so a sandboxed app
+/// cannot keep data between sessions. LAN apps are operator-trusted by
+/// default (persistent), the toggle exists for the ones that are not.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalApp {
     pub name: String,
     pub description: String,
     pub url: String,
+    #[serde(default)]
+    pub sandboxed: bool,
 }
 
 /// MeshApp is one mesh application entry: what it is and the MRI it
-/// will resolve through once mesh resolution ships.
+/// will resolve through once mesh resolution ships. Mesh apps are
+/// remote and therefore NOT trusted by default: sandboxed on.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeshApp {
     pub name: String,
     pub description: String,
     pub mri: String,
+    #[serde(default = "sandboxed_default")]
+    pub sandboxed: bool,
+}
+
+fn sandboxed_default() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize)]

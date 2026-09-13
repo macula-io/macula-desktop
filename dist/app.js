@@ -104,12 +104,14 @@ function renderApps() {
     localList.innerHTML = appsState.local
       .map(
         (a, i) =>
-          '<div class="app-card app-openable" data-url="' + escapeHtml(a.url) + '" data-name="' + escapeHtml(a.name) + '">' +
+          '<div class="app-card app-openable" data-url="' + escapeHtml(a.url) + '" data-name="' + escapeHtml(a.name) + '" data-sandboxed="' + (a.sandboxed ? 1 : 0) + '">' +
           '<div class="app-glyph">' + APP_GLYPH + "</div>" +
           '<div class="app-info">' +
           '<div class="app-name">' + escapeHtml(a.name) + "</div>" +
           '<div class="app-desc">' + escapeHtml(a.description || "") + "</div>" +
           '<div class="app-url">' + escapeHtml(a.url) + "</div></div>" +
+          '<button class="sandbox-toggle ' + (a.sandboxed ? "sandboxed" : "trusted") + '" data-kind="local" data-index="' + i + '" title="Toggle sandbox — sandboxed apps cannot keep data between sessions">' +
+          (a.sandboxed ? "sandboxed" : "trusted") + "</button>" +
           '<button class="open-btn" data-url="' + escapeHtml(a.url) + '">Open <span aria-hidden="true">↗</span></button>' +
           '<button class="remove-btn" data-kind="local" data-index="' + i + '" title="Remove ' + escapeHtml(a.name) + '" aria-label="Remove ' + escapeHtml(a.name) + '">' + REMOVE_GLYPH + "</button>" +
           "</div>"
@@ -130,6 +132,8 @@ function renderApps() {
           '<div class="app-name">' + escapeHtml(a.name) + "</div>" +
           '<div class="app-desc">' + escapeHtml(a.description || "") + "</div>" +
           '<div class="app-url">' + escapeHtml(a.mri) + "</div></div>" +
+          '<button class="sandbox-toggle ' + (a.sandboxed ? "sandboxed" : "trusted") + '" data-kind="mesh" data-index="' + i + '" title="Toggle sandbox — sandboxed apps cannot keep data between sessions">' +
+          (a.sandboxed ? "sandboxed" : "trusted") + "</button>" +
           '<span class="mesh-tag">resolves with the DHT slice</span>' +
           '<button class="remove-btn" data-kind="mesh" data-index="' + i + '" title="Remove ' + escapeHtml(a.name) + '" aria-label="Remove ' + escapeHtml(a.name) + '">' + REMOVE_GLYPH + "</button>" +
           "</div>"
@@ -151,6 +155,22 @@ function renderApps() {
       persistApps();
     });
   });
+
+  // The sandbox toggle flips one app's trust posture and persists.
+  localList.querySelectorAll(".sandbox-toggle").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      appsState.local[Number(btn.dataset.index)].sandboxed = !appsState.local[Number(btn.dataset.index)].sandboxed;
+      persistApps();
+    });
+  });
+  meshList.querySelectorAll(".sandbox-toggle").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      appsState.mesh[Number(btn.dataset.index)].sandboxed = !appsState.mesh[Number(btn.dataset.index)].sandboxed;
+      persistApps();
+    });
+  });
 }
 
 function wireLocalCards(list) {
@@ -161,7 +181,7 @@ function wireLocalCards(list) {
     });
   });
   list.querySelectorAll(".app-openable").forEach((card) => {
-    card.addEventListener("click", () => openEmbedded(card.dataset.name, card.dataset.url));
+    card.addEventListener("click", () => openEmbedded(card.dataset.name, card.dataset.url, card.dataset.sandboxed === "1"));
   });
 }
 
@@ -222,7 +242,8 @@ function wireForm(kind) {
     const desc = document.getElementById(`f-${kind}-desc`).value.trim();
     const key = kind === "local" ? "url" : "mri";
     const value = document.getElementById(`f-${kind}-${key}`).value.trim();
-    const entry = kind === "local" ? { name, description: desc, url: value } : { name, description: desc, mri: value };
+    const sandboxed = document.getElementById(`f-${kind}-sandbox`).checked;
+    const entry = kind === "local" ? { name, description: desc, url: value, sandboxed } : { name, description: desc, mri: value, sandboxed };
     try {
       const merged = { local: appsState.local, mesh: appsState.mesh };
       merged[kind] = [...merged[kind], entry];
@@ -233,6 +254,7 @@ function wireForm(kind) {
       btn.classList.remove("hidden");
       err.classList.add("hidden");
       ["name", "desc", key].forEach((f) => (document.getElementById(`f-${kind}-${f}`).value = ""));
+      document.getElementById(`f-${kind}-sandbox`).checked = kind === "mesh";
     } catch (e) {
       err.textContent = String(e);
       err.classList.remove("hidden");
@@ -252,11 +274,17 @@ wireForm("mesh");
 
 let embeddedUrl = "";
 
-function openEmbedded(name, url) {
+function openEmbedded(name, url, sandboxed) {
   embeddedUrl = url;
   document.getElementById("embed-title").textContent = name;
   document.getElementById("embed-url").textContent = url;
-  document.getElementById("embed-frame").src = url;
+  const frame = document.getElementById("embed-frame");
+  if (sandboxed) {
+    frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-popups allow-downloads");
+  } else {
+    frame.removeAttribute("sandbox");
+  }
+  frame.src = url;
   document.body.classList.add("app-open");
   document.getElementById("embedded-app").classList.remove("hidden");
 }
