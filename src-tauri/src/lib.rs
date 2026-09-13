@@ -12,6 +12,7 @@
 //! state that honestly.
 
 mod apps;
+mod chat;
 mod mesh;
 
 use tauri::Manager;
@@ -28,6 +29,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             mesh::mesh_status,
+            chat::chat_send,
             apps::apps_config,
             apps::save_apps,
             apps::config_path_display,

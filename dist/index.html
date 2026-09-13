@@ -198,16 +198,22 @@
       </section>
 
       <section id="tab-chat" class="pane hidden">
-        <div class="pane-title"><h1>Chat</h1><span class="sub">rooms on the mesh</span></div>
-        <div class="empty">
-          <svg width="40" height="40" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M2 3.5h12v7.5H5.5L2 14V3.5Z"/>
-          </svg>
-          <div class="title">No rooms yet</div>
-          <div class="hint">
-            Chat over rooms lands on top of the live mesh link — join and talk to
-            whoever is on the mesh. This tab will show your joined rooms and
-            their conversations.
+        <div class="pane-title"><h1>Chat</h1><span class="sub">your personal agent, from the Rust core</span></div>
+        <div class="chat-wrap">
+          <div class="chat-log" id="chat-log">
+            <div class="chat-empty">
+              No conversation yet — ask your agent anything. Replies stream
+              from the Rust core over IPC; the webview still never touches
+              the network.
+            </div>
+          </div>
+          <div class="chat-input-row">
+            <textarea id="chat-input" rows="1" placeholder="message your agent… (enter sends, shift+enter newline)"></textarea>
+            <button class="chat-send" id="chat-send" title="Send (Enter)">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1.5 7L12.5 2.5 9 12.5 6.5 7.5 1.5 7Z"/>
+              </svg>
+            </button>
           </div>
         </div>
       </section>
@@ -310,6 +316,7 @@
       </section>
     </main>
   </div>
+  <script src="vendor/marked.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

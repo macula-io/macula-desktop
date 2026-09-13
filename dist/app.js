@@ -321,6 +321,91 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;");
 }
 
+// --- chat -----------------------------------------------------------------
+
+const { listen } = window.__TAURI__.event;
+
+let chatHistory = []; // role/content, the whole conversation
+let assistantBubble = null; // the bubble being streamed into
+
+const chatLog = document.getElementById("chat-log");
+const chatInput = document.getElementById("chat-input");
+const chatSend = document.getElementById("chat-send");
+
+function addUserMessage(text) {
+  chatHistory.push({ role: "user", content: text });
+  const wrap = document.createElement("div");
+  wrap.className = "msg user";
+  wrap.innerHTML =
+    '<div class="role">you</div><div class="bubble">' + escapeHtml(text) + "</div>";
+  chatLog.appendChild(wrap);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function addAssistantBubble() {
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant";
+  wrap.innerHTML =
+    '<div class="role">agent</div><div class="bubble"></div>';
+  chatLog.appendChild(wrap);
+  assistantBubble = wrap.querySelector(".bubble");
+  assistantBubble.innerHTML = '<span class="cursor"></span>';
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return wrap;
+}
+
+function finishAssistant() {
+  if (!assistantBubble) return;
+  assistantBubble.querySelector(".cursor")?.remove();
+  const text = assistantBubble.textContent;
+  chatHistory.push({ role: "assistant", content: text });
+  assistantBubble.innerHTML = marked.parse(text);
+  assistantBubble = null;
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function sendChat() {
+  const text = chatInput.value.trim();
+  if (!text || assistantBubble) return;
+  chatInput.value = "";
+  chatInput.style.height = "auto";
+  document.querySelector(".chat-empty")?.remove();
+  addUserMessage(text);
+  addAssistantBubble();
+  invoke("chat_send", { messages: chatHistory });
+}
+
+chatSend.addEventListener("click", sendChat);
+chatInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendChat();
+  }
+});
+chatInput.addEventListener("input", () => {
+  chatInput.style.height = "auto";
+  chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + "px";
+});
+
+listen("chat-delta", (e) => {
+  if (!assistantBubble) return;
+  assistantBubble.querySelector(".cursor")?.remove();
+  assistantBubble.appendChild(document.createTextNode(e.payload));
+  assistantBubble.appendChild(document.createElement("span")).className = "cursor";
+  chatLog.scrollTop = chatLog.scrollHeight;
+});
+
+listen("chat-error", (e) => {
+  if (!assistantBubble) return;
+  assistantBubble.innerHTML =
+    '<span class="error-note">error: ' + escapeHtml(String(e.payload)) + "</span>";
+  assistantBubble = null;
+});
+
+listen("chat-done", () => {
+  finishAssistant();
+});
+
 // --- titlebar window controls -------------------------------------------
 
 document.getElementById("win-min").addEventListener("click", () => invoke("window_minimize"));
