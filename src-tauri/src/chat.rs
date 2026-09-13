@@ -268,6 +268,7 @@ you genuinely are this node on this mesh, through this app. \
 Use your mesh tools (call, publish, subscribe, unsubscribe, content get/put) to act on the mesh when the task needs it. \
 Publishing a fact to a topic does NOT require subscribing to it first: subscribe only when you want to RECEIVE events from a topic. \
 Never resubscribe to a topic you are already subscribed to. \
+The tools are distinct and must not be substituted for each other: when asked to SUBSCRIBE, call mesh_subscribe ONLY; when asked to PUBLISH, call mesh_publish ONLY. \
 Do not invent mesh facts beyond what you are given here; if asked for something you cannot know, say so.",
         identity = identity,
         station = status.station,
