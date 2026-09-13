@@ -325,7 +325,6 @@ function escapeHtml(s) {
 
 const { listen } = window.__TAURI__.event;
 
-let chatHistory = []; // role/content, the whole conversation
 let assistantBubble = null; // the bubble being streamed into
 
 const chatLog = document.getElementById("chat-log");
@@ -333,7 +332,6 @@ const chatInput = document.getElementById("chat-input");
 const chatSend = document.getElementById("chat-send");
 
 function addUserMessage(text) {
-  chatHistory.push({ role: "user", content: text });
   const wrap = document.createElement("div");
   wrap.className = "msg user";
   wrap.innerHTML =
@@ -358,7 +356,6 @@ function finishAssistant() {
   if (!assistantBubble) return;
   assistantBubble.querySelector(".cursor")?.remove();
   const text = assistantBubble.textContent;
-  chatHistory.push({ role: "assistant", content: text });
   assistantBubble.innerHTML = marked.parse(text);
   assistantBubble = null;
   chatLog.scrollTop = chatLog.scrollHeight;
@@ -372,7 +369,7 @@ function sendChat() {
   document.querySelector(".chat-empty")?.remove();
   addUserMessage(text);
   addAssistantBubble();
-  invoke("chat_send", { messages: chatHistory });
+  invoke("chat_send", { content: text });
 }
 
 chatSend.addEventListener("click", sendChat);
@@ -439,6 +436,10 @@ function truncate(s, n) {
 
 listen("chat-done", () => {
   finishAssistant();
+});
+
+document.getElementById("autoreact-toggle").addEventListener("change", (e) => {
+  invoke("set_chat_settings", { autoReact: e.target.checked });
 });
 
 // --- titlebar window controls -------------------------------------------
@@ -576,4 +577,9 @@ document.getElementById("copy-node").addEventListener("click", async () => {
 refreshMesh();
 refreshApps();
 setInterval(refreshMesh, 2000);
+
+(async () => {
+  const s = await invoke("chat_settings");
+  document.getElementById("autoreact-toggle").checked = s.autoReact;
+})();
 setInterval(tickUptime, 1000);

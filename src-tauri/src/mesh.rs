@@ -212,6 +212,10 @@ impl MeshLink {
                                             "seq": event.seq,
                                         }),
                                     );
+                                    // The auto-react policy lives in the chat
+                                    // module: when it is on, this wake turns
+                                    // the event into an agent turn.
+                                    crate::chat::maybe_react(&app);
                                 }
                                 Err(_) => continue, // a missed read window; keep listening
                             }

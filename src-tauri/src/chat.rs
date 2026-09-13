@@ -43,24 +43,184 @@ pub struct ToolCallFunction {
     pub arguments: String,
 }
 
-/// chat_send fires one completion request in the background: it returns
-/// immediately, then emits `chat-delta` events for every streamed
-/// fragment, `chat-error` on failure, and a final `chat-done`. The
-/// request is grounded in the app's live mesh state: a system message
-/// describes who this agent is (its node identity) and what it is
-/// connected to, built fresh at send time.
+/// ChatState is the conversation and the agent's standing policy,
+/// shared between the user-driven path and the mesh-event reactor. The
+/// history is authoritative HERE: the webview sends only the newest
+/// user message, and reactor-driven turns append without the UI.
+pub struct ChatState {
+    pub history: std::sync::Mutex<Vec<ChatMessage>>,
+    /// auto_react: mesh events may wake the agent without a user turn.
+    pub auto_react: std::sync::Mutex<bool>,
+    /// in_flight: one turn at a time, user-driven or reactor-driven.
+    pub in_flight: std::sync::Mutex<bool>,
+}
+
+impl Default for ChatState {
+    fn default() -> Self {
+        ChatState {
+            history: std::sync::Mutex::new(Vec::new()),
+            auto_react: std::sync::Mutex::new(false),
+            in_flight: std::sync::Mutex::new(false),
+        }
+    }
+}
+
+/// Settings is the persisted chat policy.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    #[serde(default)]
+    pub auto_react: bool,
+}
+
+fn settings_path() -> Option<PathBuf> {
+    let dir = if cfg!(target_os = "windows") {
+        std::env::var_os("LOCALAPPDATA")
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|v| !v.is_empty())
+            .or_else(|| std::env::var_os("HOME").map(|h| {
+                let mut p = PathBuf::from(&h);
+                p.push(".config");
+                p.into_os_string()
+            }))
+    }?;
+    let mut path = PathBuf::from(dir);
+    path.push("macula-desktop");
+    path.push("settings.json");
+    Some(path)
+}
+
+/// chat_settings returns the persisted policy (defaults when absent).
+#[tauri::command]
+pub fn chat_settings() -> Settings {
+    settings_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
+        .unwrap_or(Settings { auto_react: false })
+}
+
+/// set_chat_settings persists the policy and applies it immediately:
+/// the reactor reads this same value for every event.
+#[tauri::command]
+pub fn set_chat_settings(
+    state: tauri::State<'_, ChatState>,
+    auto_react: bool,
+) -> Result<(), String> {
+    *state.auto_react.lock().expect("chat policy lock") = auto_react;
+    let Some(path) = settings_path() else {
+        return Err("no config directory could be determined".to_string());
+    };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create config directory: {e}"))?;
+    }
+    let text = serde_json::to_string_pretty(&Settings { auto_react })
+        .map_err(|e| format!("encode settings: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("write settings: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("commit settings: {e}"))?;
+    Ok(())
+}
+
+/// chat_send takes the operator's NEWEST message (the history lives in
+/// ChatState), runs the agent turn in the background, and streams
+/// deltas as before.
 #[tauri::command]
 pub fn chat_send(
     app: tauri::AppHandle,
-    link: tauri::State<'_, crate::mesh::MeshLink>,
-    messages: Vec<ChatMessage>,
+    state: tauri::State<'_, ChatState>,
+    content: String,
 ) -> Result<(), String> {
-    if messages.is_empty() {
-        return Err("no messages to send".to_string());
+    if content.trim().is_empty() {
+        return Err("empty message".to_string());
     }
-    let grounded = ground_messages(&link, messages);
-    std::thread::spawn(move || run_chat(app, grounded));
+    state
+        .history
+        .lock()
+        .expect("chat history lock")
+        .push(ChatMessage { role: "user".to_string(), content, tool_calls: None, tool_call_id: None });
+    std::thread::spawn(move || run_user_turn(app));
     Ok(())
+}
+
+/// run_user_turn executes the operator-initiated turn and records the
+/// assistant's answer back into the shared history.
+fn run_user_turn(app: tauri::AppHandle) {
+    let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime for the chat link");
+    runtime.block_on(async {
+        let state = app.state::<ChatState>();
+        let link = app.state::<crate::mesh::MeshLink>();
+        let history: Vec<ChatMessage> = state
+            .history
+            .lock()
+            .expect("chat history lock")
+            .iter()
+            .cloned()
+            .collect();
+        let result = run_turn(&app, &link, history).await;
+        let _ = app.emit("chat-done", ());
+        record_answer(&state, result);
+    });
+}
+
+fn record_answer(state: &ChatState, result: Result<String, Box<dyn std::error::Error + Send + Sync>>) {
+    match result {
+        Ok(text) => {
+            if !text.is_empty() {
+                state.history.lock().expect("chat history lock").push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: text,
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+        }
+        Err(_) => {} // the error was already emitted from run_turn
+    }
+}
+
+/// maybe_react is the mesh-event reactor: when auto_react is on and no
+/// turn is in flight, a fresh event wakes the agent to process what it
+/// heard. Events arriving while a turn runs simply wait in the buffer --
+/// the next event that finds the agent idle wakes it again.
+pub fn maybe_react(app: &tauri::AppHandle) {
+    let app = app.clone();
+    {
+        let state = app.state::<ChatState>();
+        let auto = *state.auto_react.lock().expect("chat policy lock");
+        if !auto {
+            return;
+        }
+        let mut inflight = state.in_flight.lock().expect("chat inflight lock");
+        if *inflight {
+            return;
+        }
+        *inflight = true;
+    }
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime for the reactor");
+        runtime.block_on(async {
+            let state = app.state::<ChatState>();
+            let link = app.state::<crate::mesh::MeshLink>();
+            let mut history: Vec<ChatMessage> = state
+                .history
+                .lock()
+                .expect("chat history lock")
+                .iter()
+                .cloned()
+                .collect();
+            history.push(ChatMessage {
+                role: "user".to_string(),
+                content: "A new mesh event just arrived on one of your subscribed topics (see your context). React as appropriate -- observe, act with your mesh tools if the event calls for it, or note it briefly.".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+            let result = run_turn(&app, &link, history).await;
+            let _ = app.emit("chat-done", ());
+            record_answer(&state, result);
+            *state.in_flight.lock().expect("chat inflight lock") = false;
+        });
+    });
 }
 
 /// ground_messages prepends the system prompt derived from the live
@@ -123,35 +283,25 @@ Do not invent mesh facts beyond what you are given here; if asked for something 
     grounded
 }
 
-fn run_chat(app: tauri::AppHandle, messages: Vec<ChatMessage>) {
-    let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime for the chat link");
-    runtime.block_on(async {
-        if let Err(e) = run_tool_loop(&app, messages).await {
-            let _ = app.emit("chat-error", e.to_string());
-        }
-        let _ = app.emit("chat-done", ());
-    });
-}
-
-/// run_tool_loop drives one or more completion requests: when the model
-/// answers with tool calls, the Rust core executes them against the live
-/// mesh link and sends the results back, until the model produces a
-/// final answer (or the round cap trips).
-async fn run_tool_loop(
+/// run_turn grounds the conversation in the live mesh state and drives
+/// the tool loop; it returns the assistant's final prose answer.
+async fn run_turn(
     app: &tauri::AppHandle,
+    link: &crate::mesh::MeshLink,
     messages: Vec<ChatMessage>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     const MAX_ROUNDS: usize = 6;
-    let link = app.state::<crate::mesh::MeshLink>();
-    let mut conversation = messages;
+    let mut conversation = ground_messages(link, messages);
+    let mut answer = String::new();
     for _round in 0..MAX_ROUNDS {
-        let tool_calls = stream_chat(app, &conversation).await?;
+        let (text, tool_calls) = stream_chat(app, &conversation).await?;
+        answer.push_str(&text);
         if tool_calls.is_empty() {
-            return Ok(()); // the model answered in prose
+            return Ok(answer);
         }
         conversation.push(ChatMessage {
             role: "assistant".to_string(),
-            content: String::new(),
+            content: text,
             tool_calls: Some(tool_calls.clone()),
             tool_call_id: None,
         });
@@ -232,7 +382,7 @@ async fn run_tool_loop(
 async fn stream_chat(
     app: &tauri::AppHandle,
     messages: &[ChatMessage],
-) -> Result<Vec<ToolCall>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, Vec<ToolCall>), Box<dyn std::error::Error + Send + Sync>> {
     let (key, base_url, model) = llm_settings()?;
 
     #[derive(Serialize)]
@@ -257,6 +407,7 @@ async fn stream_chat(
     use futures_util::StreamExt;
     let mut stream = response.bytes_stream();
     let mut buf = String::new();
+    let mut text = String::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
@@ -272,6 +423,7 @@ async fn stream_chat(
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
                     let choice = &v["choices"][0];
                     if let Some(delta) = choice["delta"]["content"].as_str() {
+                        text.push_str(delta);
                         let _ = app.emit("chat-delta", delta);
                     }
                     if let Some(calls) = choice["delta"]["tool_calls"].as_array() {
@@ -300,7 +452,7 @@ async fn stream_chat(
             }
         }
     }
-    Ok(tool_calls)
+    Ok((text, tool_calls))
 }
 
 /// TOOLS is the agent's native toolbox: mesh operations executed by

@@ -26,11 +26,14 @@ pub fn run() {
                 app.handle().clone(),
             );
             app.manage(mesh_link);
+            app.manage(chat::ChatState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             mesh::mesh_status,
             chat::chat_send,
+            chat::chat_settings,
+            chat::set_chat_settings,
             apps::apps_config,
             apps::save_apps,
             apps::config_path_display,

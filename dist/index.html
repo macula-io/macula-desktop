@@ -198,7 +198,12 @@
       </section>
 
       <section id="tab-chat" class="pane hidden">
-        <div class="pane-title"><h1>Chat</h1><span class="sub">your personal agent, from the Rust core</span></div>
+        <div class="pane-title">
+          <h1>Chat</h1><span class="sub">your personal agent, from the Rust core</span>
+          <label class="form-check autoreact" title="When on, incoming subscribed events wake the agent to react on its own">
+            <input id="autoreact-toggle" type="checkbox" /> auto-react to mesh events
+          </label>
+        </div>
         <div class="chat-wrap">
           <div class="chat-log" id="chat-log">
             <div class="chat-empty">

@@ -350,6 +350,8 @@ body {
 
 .pane-title .sub { color: var(--dim); font-size: 13px; }
 
+.pane-title .autoreact { margin-left: auto; font-size: 12px; white-space: nowrap; }
+
 .pane-desc { color: var(--dim); margin-bottom: 24px; max-width: 620px; }
 
 /* ---------- cards ---------- */
