@@ -854,6 +854,8 @@ body.app-open .pane { display: none; }
 
 .approve-btn.ok { background: var(--ok); border-color: var(--ok); color: #06281c; }
 .approve-btn.deny { background: var(--bad); border-color: var(--bad); color: #2d0a0a; }
+.approve-btn.all { background: var(--panel-raised); color: var(--dim); }
+.approve-btn.all:disabled { opacity: 0.6; cursor: default; }
 .approve-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .approval-answered { font-size: 12px; color: var(--dim); }
@@ -901,6 +903,7 @@ body.app-open .pane { display: none; }
 .chat-send:hover { background: var(--accent-wash); }
 .chat-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .chat-send:disabled { opacity: 0.5; cursor: default; }
+.chat-send.stop { color: var(--bad); }
 
 /* ---------- agents roster ---------- */
 

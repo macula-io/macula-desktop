@@ -332,6 +332,15 @@ let assistantBubble = null; // the bubble being streamed into
 const chatLog = document.getElementById("chat-log");
 const chatInput = document.getElementById("chat-input");
 const chatSend = document.getElementById("chat-send");
+const chatStop = document.getElementById("chat-stop");
+
+let turning = false;
+
+function setTurning(on) {
+  turning = on;
+  chatSend.classList.toggle("hidden", on);
+  chatStop.classList.toggle("hidden", !on);
+}
 
 function addUserMessage(text) {
   const wrap = document.createElement("div");
@@ -365,16 +374,18 @@ function finishAssistant() {
 
 function sendChat() {
   const text = chatInput.value.trim();
-  if (!text || assistantBubble) return;
+  if (!text || turning) return;
   chatInput.value = "";
   chatInput.style.height = "auto";
   document.querySelector(".chat-empty")?.remove();
   addUserMessage(text);
   addAssistantBubble();
+  setTurning(true);
   invoke("chat_send", { content: text });
 }
 
 chatSend.addEventListener("click", sendChat);
+chatStop.addEventListener("click", () => invoke("chat_interrupt"));
 chatInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
@@ -395,10 +406,12 @@ listen("chat-delta", (e) => {
 });
 
 listen("chat-error", (e) => {
-  if (!assistantBubble) return;
-  assistantBubble.innerHTML =
-    '<span class="error-note">error: ' + escapeHtml(String(e.payload)) + "</span>";
-  assistantBubble = null;
+  if (assistantBubble) {
+    assistantBubble.innerHTML =
+      '<span class="error-note">error: ' + escapeHtml(String(e.payload)) + "</span>";
+    assistantBubble = null;
+  }
+  setTurning(false);
 });
 
 // A tool the agent called on the mesh, rendered as a transparent note
@@ -436,8 +449,21 @@ function truncate(s, n) {
   return s.length <= n ? s : s.slice(0, n) + "…";
 }
 
+listen("chat-interrupted", () => {
+  if (assistantBubble) {
+    assistantBubble.querySelector(".cursor")?.remove();
+    const text = assistantBubble.textContent;
+    assistantBubble.innerHTML =
+      (text ? marked.parse(text) + "<br>" : "") +
+      '<span class="error-note">interrupted</span>';
+    assistantBubble = null;
+  }
+  setTurning(false);
+});
+
 listen("chat-done", () => {
   finishAssistant();
+  setTurning(false);
 });
 
 document.getElementById("autoreact-toggle").addEventListener("change", (e) => {
@@ -460,14 +486,21 @@ listen("chat-approval", (e) => {
     '<div class="approval-actions">' +
     '<button class="approve-btn ok" data-id="' + escapeHtml(e.payload.id) + '" data-approved="true">Approve</button>' +
     '<button class="approve-btn deny" data-id="' + escapeHtml(e.payload.id) + '" data-approved="false">Deny</button>' +
+    '<button class="approve-btn all" id="approve-all-btn">Approve all this turn</button>' +
     "</div></div>";
   chatLog.appendChild(wrap);
   chatLog.scrollTop = chatLog.scrollHeight;
 });
 
+document.getElementById("approve-all-btn")?.addEventListener("click", () => {
+  invoke("set_chat_approve_all");
+  document.getElementById("approve-all-btn").textContent = "approved ✓";
+  document.getElementById("approve-all-btn").disabled = true;
+});
+
 document.addEventListener("click", (e) => {
   const btn = e.target.closest(".approve-btn");
-  if (!btn) return;
+  if (!btn || btn.id === "approve-all-btn") return;
   invoke("approve_tool", { id: btn.dataset.id, approved: btn.dataset.approved === "true" });
   const note = btn.closest(".approval-note");
   note.querySelector(".approval-actions").innerHTML =

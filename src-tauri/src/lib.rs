@@ -27,7 +27,9 @@ pub fn run() {
                 app.handle().clone(),
             );
             app.manage(mesh_link);
-            app.manage(chat::ChatState::default());
+            let chat_state = chat::ChatState::default();
+            chat::load_transcript(&chat_state);
+            app.manage(chat_state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -41,6 +43,8 @@ pub fn run() {
             chat::chat_settings,
             chat::set_chat_settings,
             chat::approve_tool,
+            chat::set_chat_approve_all,
+            chat::chat_interrupt,
             apps::apps_config,
             apps::save_apps,
             apps::config_path_display,

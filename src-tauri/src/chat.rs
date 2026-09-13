@@ -57,6 +57,12 @@ pub struct ChatState {
     /// answer, keyed by approval id.
     pub pending_approvals:
         std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    /// approve_all: every gated tool in the CURRENT turn auto-approves;
+    /// reset when the turn starts.
+    pub approve_all: std::sync::Mutex<bool>,
+    /// interrupt: the operator asked to stop the current turn; the
+    /// stream loop checks it between chunks.
+    pub interrupt: std::sync::atomic::AtomicBool,
 }
 
 impl Default for ChatState {
@@ -66,6 +72,8 @@ impl Default for ChatState {
             auto_react: std::sync::Mutex::new(false),
             in_flight: std::sync::Mutex::new(false),
             pending_approvals: std::sync::Mutex::new(std::collections::HashMap::new()),
+            approve_all: std::sync::Mutex::new(false),
+            interrupt: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -100,12 +108,94 @@ pub fn approve_tool(
     }
 }
 
+/// set_chat_approve_all auto-approves every remaining gated tool call
+/// in the current turn.
+#[tauri::command]
+pub fn set_chat_approve_all(state: tauri::State<'_, ChatState>) -> Result<(), String> {
+    *state.approve_all.lock().expect("chat policy lock") = true;
+    Ok(())
+}
+
+/// chat_interrupt asks the running turn to stop: the stream loop
+/// checks the flag between chunks and ends the turn with a note.
+#[tauri::command]
+pub fn chat_interrupt(state: tauri::State<'_, ChatState>) -> Result<(), String> {
+    state
+        .interrupt
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
 /// Settings is the persisted chat policy.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     #[serde(default)]
     pub auto_react: bool,
+}
+
+/// transcript_path is the append-only conversation log:
+/// ~/.config/macula-desktop/chat.jsonl. It is both the resume source
+/// and the audit trail; the file grows, the in-memory history loads
+/// only the most recent messages.
+fn transcript_path() -> Option<PathBuf> {
+    let dir = settings_path()?.parent().map(|p| p.to_path_buf());
+    let mut path = dir?;
+    path.push("chat.jsonl");
+    Some(path)
+}
+
+/// append_transcript adds one role/content line to the JSONL log.
+/// Failures are logged, never fatal: the conversation must never break
+/// because the log could not be written.
+fn append_transcript(role: &str, content: &str) {
+    let Some(path) = transcript_path() else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let line = serde_json::json!({ "role": role, "content": content }).to_string();
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            use std::io::Write;
+            let _ = writeln!(file, "{line}");
+        }
+        Err(e) => eprintln!("append_transcript: {e}"),
+    }
+}
+
+/// load_transcript restores the most recent conversation turns into
+/// the in-memory history. A missing or corrupt file is an empty
+/// history, not an error.
+pub fn load_transcript(state: &ChatState) {
+    let Some(path) = transcript_path() else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let mut turns: Vec<ChatMessage> = Vec::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            let role = v["role"].as_str().unwrap_or("").to_string();
+            let content = v["content"].as_str().unwrap_or("").to_string();
+            if !role.is_empty() && !content.is_empty() {
+                turns.push(ChatMessage {
+                    role,
+                    content,
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+        }
+    }
+    let keep = turns.len().saturating_sub(200);
+    *state.history.lock().expect("chat history lock") = turns[keep..].to_vec();
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -213,6 +303,7 @@ fn record_answer(
         return; // the error was already emitted from run_turn
     };
     if !text.is_empty() {
+        append_transcript("assistant", &text);
         state
             .history
             .lock()
@@ -224,6 +315,15 @@ fn record_answer(
                 tool_call_id: None,
             });
     }
+}
+
+/// begin_turn resets the per-turn policy: no interrupt pending, no
+/// approve-all carried over from the previous turn.
+fn begin_turn(state: &ChatState) {
+    state
+        .interrupt
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    *state.approve_all.lock().expect("chat policy lock") = false;
 }
 
 /// maybe_react is the mesh-event reactor: when auto_react is on and no
@@ -244,6 +344,7 @@ pub fn maybe_react(app: &tauri::AppHandle) {
         }
         *inflight = true;
     }
+    begin_turn(&app.state::<ChatState>());
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime for the reactor");
         runtime.block_on(async {
@@ -524,7 +625,12 @@ async fn stream_chat(
     let mut buf = String::new();
     let mut text = String::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let interrupt = &app.state::<ChatState>().interrupt;
     while let Some(chunk) = stream.next().await {
+        if interrupt.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = app.emit("chat-interrupted", ());
+            return Ok((text, tool_calls));
+        }
         let chunk = chunk?;
         buf.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(pos) = buf.find('\n') {
