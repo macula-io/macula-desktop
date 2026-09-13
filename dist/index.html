@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>macula-desktop</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar">
+      <div class="brand">macula<span class="dim">·desktop</span></div>
+      <button class="tab active" data-tab="mesh">Mesh</button>
+      <button class="tab" data-tab="chat">Chat</button>
+      <button class="tab" data-tab="teams">Teams</button>
+      <button class="tab" data-tab="services">Services</button>
+      <button class="tab" data-tab="realms">Realms</button>
+      <div class="sidebar-footer dim">walking skeleton</div>
+    </nav>
+    <main class="content">
+      <section id="tab-mesh" class="pane">
+        <h1>Mesh</h1>
+        <div class="card">
+          <div class="row"><span class="label">Station</span><span id="station">—</span></div>
+          <div class="row"><span class="label">Status</span><span id="status" class="pill connecting">connecting…</span></div>
+          <div class="row"><span class="label">Identity</span><span id="identity">generating puzzle-hardened keypair…</span></div>
+          <div class="row"><span class="label">Error</span><span id="error" class="dim">none</span></div>
+        </div>
+        <p class="note dim">
+          This link is the real thing: the Rust core generated a mesh identity,
+          dialed station-de-frankfurt.macula.io:4433 over QUIC, and holds the
+          session while the app runs. The webview never touches the network.
+        </p>
+      </section>
+      <section id="tab-chat" class="pane hidden">
+        <h1>Chat</h1>
+        <p class="dim">Not built yet — the skeleton ships the shell, the IPC, and the mesh link. Chat-over-rooms comes on top of this link.</p>
+      </section>
+      <section id="tab-teams" class="pane hidden">
+        <h1>Teams</h1>
+        <p class="dim">Not built yet — lanes, handoffs, and the roster will render here from the Rust core's mesh state.</p>
+      </section>
+      <section id="tab-services" class="pane hidden">
+        <h1>Services</h1>
+        <p class="dim">Not built yet — the DHT procedure catalog will render here.</p>
+      </section>
+      <section id="tab-realms" class="pane hidden">
+        <h1>Realms</h1>
+        <p class="dim">Not built yet — realm membership will render here.</p>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

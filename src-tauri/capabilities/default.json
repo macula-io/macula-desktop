@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window: core defaults only. Custom commands (mesh_status) are registered Rust functions and need no capability entry; this file keeps the webview limited to the core surface.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

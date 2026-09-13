@@ -1,0 +1,27 @@
+[package]
+name = "macula-desktop"
+version = "0.1.0"
+description = "Desktop GUI for the Macula mesh: Tauri shell over the macula-rust SDK"
+edition = "2021"
+
+[lib]
+name = "macula_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# The published SDK crate -- the ONLY macula-io dependency, per the
+# exploration doc's constraint (SDKs only, no lazymesh/macula-cli).
+macula-rust = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The mesh link runs on its own thread with its own tokio runtime
+# (macula-rust/quinn need one; tauri's own async runtime is separate).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
+
+[profile.release]
+strip = true
+lto = true
