@@ -853,6 +853,12 @@ document.getElementById("copy-node").addEventListener("click", async () => {
 refreshMesh();
 refreshApps();
 setInterval(refreshMesh, 2000);
+setInterval(() => {
+  const active = document.querySelector(".pane:not(.hidden)")?.id;
+  if (active === "tab-teams") refreshTeams();
+  if (active === "tab-rooms") refreshRooms();
+  if (active === "tab-agents") refreshRoster();
+}, 2000);
 
 (async () => {
   const s = await invoke("chat_settings");
