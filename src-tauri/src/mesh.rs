@@ -316,10 +316,15 @@ impl MeshLink {
                     // locally). Agent-tool subscriptions spawn their own
                     // forwarding tasks on demand.
                     let (ev_tx, mut ev_rx) = mpsc::channel::<frame::EventInfo>(512);
-                    let core_topics = [HELLO_TOPIC, LOBBY_TOPIC, "agents.room.*"];
-                    for topic in core_topics {
+                    // Presence is mesh-wide: agent.hello lives on the
+                    // zero realm (macula-mcp publishes and receives it
+                    // there, and the stations rebroadcast hellos into
+                    // it). The lobby and rooms are realm-scoped and
+                    // follow the operating realm.
+                    let core_topics = [(HELLO_TOPIC, [0u8; 32]), (LOBBY_TOPIC, realm), ("agents.room.*", realm)];
+                    for (topic, topic_realm) in core_topics {
                         let spec =
-                            frame::SubscribeSpec::new(topic, realm, identity.node_id());
+                            frame::SubscribeSpec::new(topic, topic_realm, identity.node_id());
                         if let Ok(sub) = session.subscribe(&spec, &identity).await {
                             let tx = ev_tx.clone();
                             tokio::spawn(drain_subscription(sub, tx));
@@ -407,7 +412,7 @@ impl MeshLink {
                                 })))
                                 .unwrap_or(Value::Null);
                                 let spec = frame::PublishSpec::new(
-                                    HELLO_TOPIC, realm, identity.node_id(), seq, payload, now_ms,
+                                    HELLO_TOPIC, [0u8; 32], identity.node_id(), seq, payload, now_ms,
                                 );
                                 let _ = session.publish(&spec, &identity).await;
                             }
