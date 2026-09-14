@@ -390,6 +390,7 @@ impl MeshLink {
                                         thread_joined_rooms.lock().expect("joined rooms lock").clear();
                                         thread_events.lock().expect("mesh events lock").clear();
                                         thread_help.lock().expect("help lock").clear();
+                                        emit_board_changed(&app);
                                         let _ = reply_tx.send(Ok(format!("operating realm switched (tag {})", hex(&tag))));
                                         break; // reconnect under the new realm
                                     }
@@ -476,17 +477,26 @@ fn route_event(
     let publisher = hex(&info.publisher);
     if info.topic == LOBBY_TOPIC {
         note_lobby(info, &publisher, &stores.public_rooms, &stores.help);
+        emit_board_changed(app);
         return;
     }
     if info.topic.starts_with("agents.room.") {
         note_room_message(info, &publisher, &stores.joined);
+        emit_board_changed(app);
         return;
     }
     if info.topic == HELLO_TOPIC {
         note_roster_entry(info, &publisher, own_node, &stores.roster);
+        emit_board_changed(app);
         return;
     }
     note_chat_event(info, &publisher, &stores.events, app);
+}
+
+/// emit_board_changed tells the webview that a board store changed --
+/// the UI refreshes the visible pane, no polling anywhere.
+fn emit_board_changed(app: &tauri::AppHandle) {
+    let _ = app.emit("mesh-board", ());
 }
 
 /// note_lobby handles central traffic: room_opened announcements go to
