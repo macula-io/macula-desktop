@@ -230,7 +230,7 @@ impl MeshLink {
     /// app's lifetime. Dropping the session (when the process exits)
     /// closes the connection. `app` is only used to surface event
     /// deliveries in the UI.
-    pub fn spawn(station: String, app: tauri::AppHandle) -> Self {
+    pub fn spawn(station: String, app: tauri::AppHandle, initial_realm: [u8; 32]) -> Self {
         let status = Arc::new(Mutex::new(Status {
             station: station.clone(),
             identity_generated: false,
@@ -271,129 +271,163 @@ impl MeshLink {
                     s.node_id = hex(&identity.node_id());
                     s.petname = crate::petname::petname(&s.node_id);
                 }
-                let mut session = match connection::connect(&station, 4433, Trust::WebPki, &identity).await {
-                    Ok(session) => {
-                        {
-                            let mut s = thread_status.lock().expect("mesh status lock");
-                            s.connected = true;
-                            s.connected_at_ms = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .ok()
-                                .map(|d| d.as_millis() as u64);
-                        }
-                        session
-                    }
-                    Err(e) => {
-                        let mut s = thread_status.lock().expect("mesh status lock");
-                        s.error = Some(e.to_string());
-                        return;
-                    }
-                };
-
-                // The session lives here, in this loop, until the process
-                // exits: serve commands and listen for subscribed-topic
-                // deliveries concurrently. `seq` is the per-session
-                // publish sequence: every PublishSpec must carry the next
-                // number. Known SDK caveat: while a CALL is being matched
-                // on the control stream, an EVENT arriving in the same
-                // window is discarded (see the SDK's own call() docs) --
-                // deliveries are therefore best-effort during calls and
-                // reliable while idle, which is the agent's normal state.
-                //
-                // Presence is part of the link itself: subscribe to the
-                // shared hello topic once, beat our own heart every
-                // minute, and fold every hello heard into the roster.
-                let mut seq: u64 = 0;
-                let mut current_realm: [u8; 32] = [0u8; 32];
-                let hello_spec = frame::SubscribeSpec::new(HELLO_TOPIC, current_realm, identity.node_id());
-                let _ = session.subscribe(&hello_spec, &identity).await;
-                let lobby_spec = frame::SubscribeSpec::new(LOBBY_TOPIC, current_realm, identity.node_id());
-                let _ = session.subscribe(&lobby_spec, &identity).await;
+                let current: std::sync::Arc<Mutex<[u8; 32]>> =
+                    std::sync::Arc::new(Mutex::new(initial_realm));
                 let own_node = hex(&identity.node_id());
                 let own_petname = crate::petname::petname(&own_node);
-                let mut heartbeat = tokio::time::interval(Duration::from_secs(60));
-                loop {
-                    tokio::select! {
-                        Some((cmd, reply_tx)) = rx.recv() => {
-                            let result = match cmd {
-                                MeshCommand::Call { procedure, args_json, realm } => {
-                                    mesh_call(&mut session, &identity, &procedure, &args_json, realm).await
+
+                // The link is reconnect-capable: the operating realm is
+                // claimed AT CONNECT TIME (pub/sub delivery is
+                // realm-scoped at the connection level), so a realm
+                // switch drops the session and dials again with the new
+                // membership. Each generation owns its session and its
+                // subscriptions; the stores survive across generations
+                // except the realm-scoped ones, which the switch clears.
+                'outer: loop {
+                    let realm = *current.lock().expect("realm lock");
+                    let mut session =
+                        match connection::connect_in_realm(&station, 4433, Trust::WebPki, &identity, &[realm])
+                            .await
+                        {
+                            Ok(session) => {
+                                {
+                                    let mut s = thread_status.lock().expect("mesh status lock");
+                                    s.connected = true;
+                                    s.error = None;
+                                    s.connected_at_ms = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .ok()
+                                        .map(|d| d.as_millis() as u64);
                                 }
-                                MeshCommand::Publish { topic, payload_json } => {
-                                    seq += 1;
-                                    mesh_publish(&mut session, &identity, &topic, &payload_json, seq).await
-                                }
-                                MeshCommand::Subscribe { topic } => {
-                                    mesh_subscribe(&mut session, &identity, &topic).await
-                                }
-                                MeshCommand::Unsubscribe { topic } => {
-                                    mesh_unsubscribe(&mut session, &identity, &topic).await
-                                }
-                                MeshCommand::JoinRoom { topic, purpose } => {
-                                    join_room_command(&mut session, &identity, &topic, &purpose, current_realm, &thread_joined_rooms).await
-                                }
-                                MeshCommand::LeaveRoom { topic } => {
-                                    leave_room_command(&mut session, &identity, &topic, current_realm, &thread_joined_rooms).await
-                                }
-                                MeshCommand::SetRealm { tag } => {
-                                    let old_hello = frame::UnsubscribeSpec::new(HELLO_TOPIC, current_realm, identity.node_id());
-                                    let old_lobby = frame::UnsubscribeSpec::new(LOBBY_TOPIC, current_realm, identity.node_id());
-                                    let _ = session.unsubscribe(&old_hello, &identity).await;
-                                    let _ = session.unsubscribe(&old_lobby, &identity).await;
-                                    let hello_spec = frame::SubscribeSpec::new(HELLO_TOPIC, tag, identity.node_id());
-                                    let lobby_spec = frame::SubscribeSpec::new(LOBBY_TOPIC, tag, identity.node_id());
-                                    let _ = session.subscribe(&hello_spec, &identity).await;
-                                    let _ = session.subscribe(&lobby_spec, &identity).await;
-                                    current_realm = tag;
-                                    thread_roster.lock().expect("roster lock").clear();
-                                    thread_public_rooms.lock().expect("public rooms lock").clear();
-                                    thread_joined_rooms.lock().expect("joined rooms lock").clear();
-                                    thread_events.lock().expect("mesh events lock").clear();
-                                    Ok(format!("operating realm switched (tag {})", hex(&current_realm)))
-                                }
-                                MeshCommand::ContentPut { data_b64, name } => {
-                                    mesh_content_put(&mut session, &identity, &data_b64, &name).await
-                                }
-                                MeshCommand::ContentGet { mcid_hex } => {
-                                    mesh_content_get(&mut session, &identity, &mcid_hex).await
-                                }
-                            };
-                            let _ = reply_tx.send(result);
-                        }
-                        _ = heartbeat.tick() => {
-                            seq += 1;
-                            let now_ms = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .map(|d| d.as_millis() as u64)
-                                .unwrap_or(0);
-                            let payload = json_to_cbor(Some(serde_json::json!({
-                                "node_id": own_node,
-                                "citizen_did": own_node,
-                                "petname": own_petname,
-                                "connected_via": "macula-desktop",
-                                "interval_seconds": 60,
-                                "at": now_ms,
-                            })))
-                            .unwrap_or(Value::Null);
-                            let spec = frame::PublishSpec::new(
-                                HELLO_TOPIC, current_realm, identity.node_id(), seq, payload, now_ms,
-                            );
-                            let _ = session.publish(&spec, &identity).await;
-                        }
-                        delivery = session.recv_event(Duration::from_secs(3600)) => {
-                            if let Ok(info) = delivery {
-                                let stores = EventStores {
-                                    roster: thread_roster.clone(),
-                                    public_rooms: thread_public_rooms.clone(),
-                                    joined: thread_joined_rooms.clone(),
-                                    events: thread_events.clone(),
-                                    help: thread_help.clone(),
-                                };
-                                route_event(&info, &app, &own_node, &stores);
+                                session
                             }
+                            Err(e) => {
+                                let mut s = thread_status.lock().expect("mesh status lock");
+                                s.connected = false;
+                                s.error = Some(e.to_string());
+                                return;
+                            }
+                        };
+
+                    // One event channel for every subscription: hello,
+                    // the lobby, and the rooms wildcard (the station's
+                    // wildcard rule matches agents.room.* with one
+                    // subscription; route_event filters to JOINED rooms
+                    // locally). Agent-tool subscriptions spawn their own
+                    // forwarding tasks on demand.
+                    let (ev_tx, mut ev_rx) = mpsc::channel::<frame::EventInfo>(512);
+                    let core_topics = [HELLO_TOPIC, LOBBY_TOPIC, "agents.room.*"];
+                    for topic in core_topics {
+                        let spec =
+                            frame::SubscribeSpec::new(topic, realm, identity.node_id());
+                        if let Ok(sub) = session.subscribe(&spec, &identity).await {
+                            let tx = ev_tx.clone();
+                            tokio::spawn(drain_subscription(sub, tx));
                         }
-                        else => break,
                     }
+                    let mut agent_subs: std::collections::HashMap<
+                        String,
+                        tokio::task::JoinHandle<()>,
+                    > = std::collections::HashMap::new();
+
+                    let mut seq: u64 = 0;
+                    let mut heartbeat = tokio::time::interval(Duration::from_secs(60));
+                    loop {
+                        tokio::select! {
+                            Some((cmd, reply_tx)) = rx.recv() => {
+                                let result = match cmd {
+                                    MeshCommand::Call { procedure, args_json, realm } => {
+                                        mesh_call(&mut session, &identity, &procedure, &args_json, realm).await
+                                    }
+                                    MeshCommand::Publish { topic, payload_json } => {
+                                        seq += 1;
+                                        mesh_publish(&mut session, &identity, &topic, &payload_json, seq).await
+                                    }
+                                    MeshCommand::Subscribe { topic } => {
+                                        let spec = frame::SubscribeSpec::new(&topic, realm, identity.node_id());
+                                        match session.subscribe(&spec, &identity).await {
+                                            Ok(sub) => {
+                                                let tx = ev_tx.clone();
+                                                agent_subs.insert(topic.clone(), tokio::spawn(drain_subscription(sub, tx)));
+                                                Ok(format!("subscribed to {topic}"))
+                                            }
+                                            Err(e) => Err(format!("subscribe failed: {e}")),
+                                        }
+                                    }
+                                    MeshCommand::Unsubscribe { topic } => {
+                                        if let Some(handle) = agent_subs.remove(&topic) {
+                                            handle.abort();
+                                        }
+                                        Ok(format!("unsubscribed from {topic}"))
+                                    }
+                                    MeshCommand::JoinRoom { topic, purpose } => {
+                                        thread_joined_rooms.lock().expect("joined rooms lock").entry(topic.clone()).or_insert(JoinedRoom {
+                                            topic: topic.clone(),
+                                            purpose,
+                                            messages: Vec::new(),
+                                        });
+                                        Ok(format!("joined room {topic}"))
+                                    }
+                                    MeshCommand::LeaveRoom { topic } => {
+                                        thread_joined_rooms.lock().expect("joined rooms lock").remove(&topic);
+                                        Ok(format!("left room {topic}"))
+                                    }
+                                    MeshCommand::SetRealm { tag } => {
+                                        *current.lock().expect("realm lock") = tag;
+                                        thread_roster.lock().expect("roster lock").clear();
+                                        thread_public_rooms.lock().expect("public rooms lock").clear();
+                                        thread_joined_rooms.lock().expect("joined rooms lock").clear();
+                                        thread_events.lock().expect("mesh events lock").clear();
+                                        thread_help.lock().expect("help lock").clear();
+                                        let _ = reply_tx.send(Ok(format!("operating realm switched (tag {})", hex(&tag))));
+                                        break; // reconnect under the new realm
+                                    }
+                                    MeshCommand::ContentPut { data_b64, name } => {
+                                        mesh_content_put(&mut session, &identity, &data_b64, &name).await
+                                    }
+                                    MeshCommand::ContentGet { mcid_hex } => {
+                                        mesh_content_get(&mut session, &identity, &mcid_hex).await
+                                    }
+                                };
+                                let _ = reply_tx.send(result);
+                            }
+                            _ = heartbeat.tick() => {
+                                seq += 1;
+                                let now_ms = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0);
+                                let payload = json_to_cbor(Some(serde_json::json!({
+                                    "node_id": own_node,
+                                    "citizen_did": own_node,
+                                    "petname": own_petname,
+                                    "connected_via": "macula-desktop",
+                                    "interval_seconds": 60,
+                                    "at": now_ms,
+                                })))
+                                .unwrap_or(Value::Null);
+                                let spec = frame::PublishSpec::new(
+                                    HELLO_TOPIC, realm, identity.node_id(), seq, payload, now_ms,
+                                );
+                                let _ = session.publish(&spec, &identity).await;
+                            }
+                            delivery = ev_rx.recv() => {
+                                if let Some(info) = delivery {
+                                    let stores = EventStores {
+                                        roster: thread_roster.clone(),
+                                        public_rooms: thread_public_rooms.clone(),
+                                        joined: thread_joined_rooms.clone(),
+                                        events: thread_events.clone(),
+                                        help: thread_help.clone(),
+                                    };
+                                    route_event(&info, &app, &own_node, &stores);
+                                }
+                            }
+                            else => break 'outer,
+                        }
+                    }
+                    // The session drops here; a SetRealm break re-enters
+                    // the outer loop and reconnects under the new realm.
                 }
             });
         });
@@ -407,49 +441,6 @@ impl MeshLink {
             help,
         }
     }
-}
-
-/// join_room_command subscribes to a room topic and tracks it locally.
-async fn join_room_command(
-    session: &mut Session,
-    identity: &KeyPair,
-    topic: &str,
-    purpose: &str,
-    realm: [u8; 32],
-    joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
-) -> Result<String, String> {
-    let spec = frame::SubscribeSpec::new(topic, realm, identity.node_id());
-    session
-        .subscribe(&spec, identity)
-        .await
-        .map_err(|e| format!("join failed: {e}"))?;
-    joined
-        .lock()
-        .expect("joined rooms lock")
-        .entry(topic.to_string())
-        .or_insert(JoinedRoom {
-            topic: topic.to_string(),
-            purpose: purpose.to_string(),
-            messages: Vec::new(),
-        });
-    Ok(format!("joined room {topic}"))
-}
-
-/// leave_room_command unsubscribes and drops local tracking.
-async fn leave_room_command(
-    session: &mut Session,
-    identity: &KeyPair,
-    topic: &str,
-    realm: [u8; 32],
-    joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
-) -> Result<String, String> {
-    let spec = frame::UnsubscribeSpec::new(topic, realm, identity.node_id());
-    session
-        .unsubscribe(&spec, identity)
-        .await
-        .map_err(|e| format!("leave failed: {e}"))?;
-    joined.lock().expect("joined rooms lock").remove(topic);
-    Ok(format!("left room {topic}"))
 }
 
 /// EventStores bundles the mesh thread's realm-scoped stores so the
@@ -622,38 +613,14 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// mesh_subscribe subscribes the session to a topic.
-async fn mesh_subscribe(
-    session: &mut Session,
-    identity: &KeyPair,
-    topic: &str,
-) -> Result<String, String> {
-    if topic.trim().is_empty() {
-        return Err("subscribe requires a topic".to_string());
+/// drain_subscription forwards one subscription's deliveries into the
+/// thread's single event channel until the subscription ends.
+async fn drain_subscription(mut sub: connection::Subscription, tx: mpsc::Sender<frame::EventInfo>) {
+    while let Ok(event) = sub.recv_event(Duration::from_secs(3600)).await {
+        if tx.send(event).await.is_err() {
+            return;
+        }
     }
-    let spec = frame::SubscribeSpec::new(topic, [0u8; 32], identity.node_id());
-    session
-        .subscribe(&spec, identity)
-        .await
-        .map_err(|e| format!("subscribe failed: {e}"))?;
-    Ok(format!("subscribed to {topic}"))
-}
-
-/// mesh_unsubscribe stops a topic's deliveries.
-async fn mesh_unsubscribe(
-    session: &mut Session,
-    identity: &KeyPair,
-    topic: &str,
-) -> Result<String, String> {
-    if topic.trim().is_empty() {
-        return Err("unsubscribe requires a topic".to_string());
-    }
-    let spec = frame::UnsubscribeSpec::new(topic, [0u8; 32], identity.node_id());
-    session
-        .unsubscribe(&spec, identity)
-        .await
-        .map_err(|e| format!("unsubscribe failed: {e}"))?;
-    Ok(format!("unsubscribed from {topic}"))
 }
 
 /// mesh_publish sends one fact to a topic. Fire-and-forget by protocol:

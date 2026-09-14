@@ -23,9 +23,12 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .setup(move |app| {
+            let initial_realm = chat::chat_settings().realm;
+            let initial_tag = chat::realm_tag(&initial_realm);
             let mesh_link = mesh::MeshLink::spawn(
                 "station-de-frankfurt.macula.io".to_string(),
                 app.handle().clone(),
+                initial_tag,
             );
             app.manage(mesh_link);
             let chat_state = chat::ChatState::default();

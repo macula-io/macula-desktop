@@ -2551,9 +2551,8 @@ dependencies = [
 
 [[package]]
 name = "macula-rust"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28aba88840af23a39c73519dfa965f0134ff04dd8f906c7cd570d90a78604dcd"
+version = "0.4.0"
+source = "git+https://github.com/macula-io/macula-rust?branch=feat%2Fconnect-realm#fc0ccbc9f52a1561c6c25cab496004ecbaf96674"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.23.1",
@@ -2562,6 +2561,7 @@ dependencies = [
  "keyring",
  "keyring-core",
  "linux-keyutils-keyring-store",
+ "log",
  "quinn",
  "rand",
  "rustls",

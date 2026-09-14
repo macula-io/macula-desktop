@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 # The published SDK crate -- the ONLY macula-io dependency, per the
 # exploration doc's constraint (SDKs only, no lazymesh/macula-cli).
-macula-rust = "0.3"
+macula-rust = { git = "https://github.com/macula-io/macula-rust", branch = "feat/connect-realm" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The chat module's LLM calls (OpenAI-compatible endpoint) -- made from
