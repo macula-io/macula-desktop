@@ -316,12 +316,18 @@ impl MeshLink {
                     // locally). Agent-tool subscriptions spawn their own
                     // forwarding tasks on demand.
                     let (ev_tx, mut ev_rx) = mpsc::channel::<frame::EventInfo>(512);
-                    // Presence is mesh-wide: agent.hello lives on the
-                    // zero realm (macula-mcp publishes and receives it
-                    // there, and the stations rebroadcast hellos into
-                    // it). The lobby and rooms are realm-scoped and
-                    // follow the operating realm.
-                    let core_topics = [(HELLO_TOPIC, [0u8; 32]), (LOBBY_TOPIC, realm), ("agents.room.*", realm)];
+                    // The entire social layer -- presence, central,
+                    // rooms -- lives on the zero realm (macula-mcp
+                    // publishes and receives it all there; the stations
+                    // rebroadcast hellos and the lobby is "the one topic
+                    // everyone keeps watching"). The operating realm
+                    // gates memory and realm-scoped services, not the
+                    // social layer.
+                    let core_topics = [
+                        (HELLO_TOPIC, [0u8; 32]),
+                        (LOBBY_TOPIC, [0u8; 32]),
+                        ("agents.room.*", [0u8; 32]),
+                    ];
                     for (topic, topic_realm) in core_topics {
                         let spec =
                             frame::SubscribeSpec::new(topic, topic_realm, identity.node_id());
