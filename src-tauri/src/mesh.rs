@@ -509,6 +509,10 @@ fn note_lobby(
 ) {
     let payload = event_json(info);
     let kind = payload["kind"].as_str().unwrap_or("");
+    eprintln!(
+        "note_lobby: kind={kind:?} payload={}",
+        event_payload(info).chars().take(120).collect::<String>()
+    );
     if kind == "room_opened" {
         let topic = payload["room_topic"].as_str().unwrap_or("").to_string();
         if topic.is_empty() {
