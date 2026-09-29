@@ -1,0 +1,96 @@
+name: release
+
+# A v* tag builds the plain macula-desktop executable per OS (no installer,
+# no AppImage, no .deb), packs it as a tar.gz (Linux, macOS) or zip
+# (Windows), and attaches them with SHA256SUMS to the GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: macula-desktop-linux-x64
+            archive: tar.gz
+            exe: macula-desktop
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: macula-desktop-macos-arm64
+            archive: tar.gz
+            exe: macula-desktop
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: macula-desktop-windows-x64
+            archive: zip
+            exe: macula-desktop.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system dependencies (WebKitGTK)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      # custom-protocol is what the Tauri CLI switches on for a production
+      # build: the webview loads the embedded ../dist, never a dev server.
+      - name: Build
+        working-directory: src-tauri
+        run: cargo build --release --locked --target ${{ matrix.target }} --features tauri/custom-protocol
+
+      # The executable sits at the archive root, as install.sh and
+      # install.ps1 expect; asset names carry no version, so the scripts'
+      # "latest" download and a pinned tag's both resolve.
+      - name: Pack
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "src-tauri/target/${{ matrix.target }}/release/${{ matrix.exe }}" out/
+          cd out
+          if [ "${{ matrix.archive }}" = zip ]; then
+            7z a -tzip "${{ matrix.asset }}.zip" "${{ matrix.exe }}" >/dev/null
+          else
+            tar -czf "${{ matrix.asset }}.tar.gz" "${{ matrix.exe }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: out/${{ matrix.asset }}.${{ matrix.archive }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum macula-desktop-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "macula-desktop $GITHUB_REF_NAME" \
+            --notes "Plain executables: unpack and run. Linux needs the system WebKitGTK 4.1 (Arch: pacman -S webkit2gtk-4.1). Verify with SHA256SUMS."

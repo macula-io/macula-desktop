@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs macula-desktop for Linux and macOS: downloads the release
 # archive matching this machine's OS/arch from GitHub Releases, verifies
-# it against the release's own checksums.txt, and installs the binary
+# it against the release's own SHA256SUMS, and installs the binary
 # into a user-local directory (no sudo).
 #
 # Usage:
@@ -45,15 +45,15 @@ detect_arch() {
 
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
-ARCHIVE="${BIN}-${VERSION}-${OS}-${ARCH}.tar.gz"
+ARCHIVE="${BIN}-${OS}-${ARCH}.tar.gz"
 
 api_url="https://api.github.com/repos/${REPO}/releases/${VERSION}"
 if [ "$VERSION" = "latest" ]; then
   download_url="https://github.com/${REPO}/releases/latest/download/${ARCHIVE}"
-  checksum_url="https://github.com/${REPO}/releases/latest/download/checksums.txt"
+  checksum_url="https://github.com/${REPO}/releases/latest/download/SHA256SUMS"
 else
   download_url="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE}"
-  checksum_url="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
+  checksum_url="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
 fi
 log "installing ${BIN} ${VERSION} for ${OS}/${ARCH} into ${INSTALL_DIR}"
 
@@ -64,9 +64,9 @@ log "downloading ${ARCHIVE}"
 curl -fsSL --retry 3 "$download_url" -o "$tmp/${ARCHIVE}"
 
 log "verifying checksum"
-curl -fsSL --retry 3 "$checksum_url" -o "$tmp/checksums.txt"
-expected="$(awk -v a="$ARCHIVE" '$2 == a { print $1 }' "$tmp/checksums.txt")"
-[ -n "$expected" ] || die "no checksum entry for ${ARCHIVE} in checksums.txt"
+curl -fsSL --retry 3 "$checksum_url" -o "$tmp/SHA256SUMS"
+expected="$(awk -v a="$ARCHIVE" '$2 == a { print $1 }' "$tmp/SHA256SUMS")"
+[ -n "$expected" ] || die "no checksum entry for ${ARCHIVE} in SHA256SUMS"
 case "$(uname -s)" in
   Darwin) actual="$(shasum -a 256 "$tmp/${ARCHIVE}" | awk '{ print $1 }')" ;;
   Linux)  actual="$(sha256sum "$tmp/${ARCHIVE}" | awk '{ print $1 }')" ;;

@@ -71,31 +71,39 @@ publication) is checked against the fleet by an ignored test:
 
 ## Install
 
-**Linux / macOS:**
+Each release carries a plain executable per OS, nothing to install:
+`macula-desktop-linux-x64.tar.gz`, `macula-desktop-macos-arm64.tar.gz` and
+`macula-desktop-windows-x64.zip`, with `SHA256SUMS`, on
+[GitHub Releases](https://github.com/macula-io/macula-desktop/releases).
+Unpack and run it from the command line:
+
+```bash
+tar xzf macula-desktop-linux-x64.tar.gz && ./macula-desktop
+```
+
+**The only runtime dependency** on Linux is the system WebKitGTK 4.1
+(Arch: `pacman -S webkit2gtk-4.1`; Debian/Ubuntu: `apt install
+libwebkit2gtk-4.1-0`). macOS and Windows ship their webview with the OS.
+
+Or let a script pick the archive for this machine, check it against
+`SHA256SUMS` and put `macula-desktop` on your PATH:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/macula-io/macula-desktop/main/install.sh | bash
 ```
 
-**Windows (PowerShell):**
-
 ```powershell
 irm https://raw.githubusercontent.com/macula-io/macula-desktop/main/install.ps1 | iex
 ```
 
-Both pull the release archive matching your OS/arch from
-[GitHub Releases](https://github.com/macula-io/macula-desktop/releases),
-verify it against the release's own `checksums.txt`, and install
-`macula-desktop` (`$HOME/.local/bin` on Linux/macOS,
-`%LOCALAPPDATA%\macula-desktop` on Windows — override with
-`MACULA_DESKTOP_INSTALL_DIR`).
+They install into `$HOME/.local/bin` (Linux/macOS) or
+`%LOCALAPPDATA%\macula-desktop` (Windows); override with
+`MACULA_DESKTOP_INSTALL_DIR`, or pin a release with
+`MACULA_DESKTOP_VERSION=v0.1.0`.
 
 To remove it again: `curl -fsSL .../uninstall.sh | bash` (or
 `irm .../uninstall.ps1 | iex` on Windows) — same repo path,
 `uninstall.sh`/`uninstall.ps1` instead of `install`.
-
-*Releases arrive with the first tagged build; until then, build from
-source:*
 
 ## Build from source
 
