@@ -260,7 +260,7 @@ pub fn load_transcript(state: &ChatState) {
     *state.history.lock().expect("chat history lock") = turns[keep..].to_vec();
 }
 
-fn settings_path() -> Option<PathBuf> {
+pub(crate) fn settings_path() -> Option<PathBuf> {
     let dir = if cfg!(target_os = "windows") {
         std::env::var_os("LOCALAPPDATA")
     } else {
@@ -947,7 +947,7 @@ async fn recall_memory(link: &crate::mesh::MeshLink, query: &str, realm: [u8; 32
     let args = serde_json::json!({ "query_text": query, "top_k": 5 }).to_string();
     match link
         .request(crate::mesh::MeshCommand::Call {
-            procedure: "answer_query".to_string(),
+            procedure: "mcl-rag/answer_query".to_string(),
             args_json: args,
             realm,
         })
@@ -971,7 +971,7 @@ async fn remember_turn(link: &crate::mesh::MeshLink, summary: &str, realm: [u8; 
         serde_json::json!({ "content": summary, "source_label": "macula-desktop" }).to_string();
     if let Err(e) = link
         .request(crate::mesh::MeshCommand::Call {
-            procedure: "add_knowledge".to_string(),
+            procedure: "mcl-rag/add_knowledge".to_string(),
             args_json: args,
             realm,
         })

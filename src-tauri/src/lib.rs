@@ -13,8 +13,8 @@
 
 mod apps;
 mod chat;
+mod io_macula;
 mod mesh;
-mod petname;
 mod teams;
 
 use tauri::Manager;
@@ -25,11 +25,7 @@ pub fn run() {
         .setup(move |app| {
             let initial_realm = chat::chat_settings().realm;
             let initial_tag = chat::realm_tag(&initial_realm);
-            let mesh_link = mesh::MeshLink::spawn(
-                "station-de-frankfurt.macula.io".to_string(),
-                app.handle().clone(),
-                initial_tag,
-            );
+            let mesh_link = mesh::MeshLink::spawn(app.handle().clone(), initial_tag);
             app.manage(mesh_link);
             let chat_state = chat::ChatState::default();
             chat::load_transcript(&chat_state);

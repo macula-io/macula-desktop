@@ -1,22 +1,25 @@
-//! The in-app mesh daemon: one background thread holding the macula-rust
-//! SDK connection for the app's whole lifetime, exposing its state to
-//! the webview through the `mesh_status` command.
+//! The in-app mesh daemon: one background thread holding a macula-rust
+//! pool for the app's whole lifetime, exposing its state to the webview
+//! through the `mesh_status` command.
 //!
-//! The session is held deliberately: dropping the last Session handle
-//! closes the connection at once (see the SDK's own Session doc). The
-//! thread parks its runtime on a never-ready future so the session
-//! stays alive until the process exits.
+//! The pool links to the fleet's stations, each pinned by the node_id it
+//! must prove, under a persistent pq_hybrid identity, trusting the
+//! io.macula realm key. It redials a link that ends and gives it back its
+//! subscriptions, so the thread holds one pool until the process exits.
+//! The social layer (presence, the lobby, rooms) lives in io.macula, where
+//! macula-mcp publishes it; the operating realm scopes calls and memory.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use macula_rust::{
     cbor::Value,
-    connection::{self, Session},
-    content,
-    frame::{self, CallResponse},
-    identity::KeyPair,
-    transport::Trust,
+    node_key::NodeKey,
+    petname::petname,
+    pool::{Call, ContentOptions, Opts, Pool, Seed, Subscription},
+    profile::Profile,
+    station_link::{Event, Publication},
 };
 use serde::Serialize;
 use tauri::Emitter;
@@ -96,7 +99,7 @@ pub struct JoinedRoom {
 }
 
 /// MeshCommand is a request the rest of the app can send into the mesh
-/// thread: the thread owns the Session, commands travel over a channel.
+/// thread: the thread owns the pool, commands travel over a channel.
 pub enum MeshCommand {
     /// Call a procedure on the mesh, JSON args in, JSON result out,
     /// in the given realm.
@@ -105,7 +108,7 @@ pub enum MeshCommand {
         args_json: String,
         realm: [u8; 32],
     },
-    /// Publish a fact to a topic (realm = the zero realm).
+    /// Publish a fact to a topic, in the social realm (io.macula).
     Publish { topic: String, payload_json: String },
     /// Subscribe to a topic; deliveries arrive as MeshEvents.
     Subscribe { topic: String },
@@ -115,10 +118,11 @@ pub enum MeshCommand {
     JoinRoom { topic: String, purpose: String },
     /// Leave a room: unsubscribe and drop local tracking.
     LeaveRoom { topic: String },
-    /// Switch the operating realm: resubscribes presence and the
-    /// lobby under the new tag and clears realm-scoped state.
+    /// Switch the operating realm: calls, agent subscriptions and
+    /// content use the new tag from now on. The social layer stays in
+    /// io.macula and needs no reconnect.
     SetRealm { tag: [u8; 32] },
-    /// Store bytes as content; returns the MCID hex.
+    /// Share bytes as content from this node; returns the MCID hex.
     ContentPut { data_b64: String, name: String },
     /// Fetch content by MCID hex; returns it as text when it is text.
     ContentGet { mcid_hex: String },
@@ -225,14 +229,13 @@ impl MeshLink {
         self.status.lock().expect("mesh status lock").clone()
     }
 
-    /// spawn starts the mesh thread: generate a puzzle-hardened
-    /// identity, connect to the station, then serve commands for the
-    /// app's lifetime. Dropping the session (when the process exits)
-    /// closes the connection. `app` is only used to surface event
-    /// deliveries in the UI.
-    pub fn spawn(station: String, app: tauri::AppHandle, initial_realm: [u8; 32]) -> Self {
+    /// spawn starts the mesh thread: load (or create) the persistent
+    /// identity, connect the pool to the fleet (retrying until it comes
+    /// up), subscribe the social layer, then serve commands for the app's
+    /// lifetime. `app` is only used to surface deliveries in the UI.
+    pub fn spawn(app: tauri::AppHandle, initial_realm: [u8; 32]) -> Self {
         let status = Arc::new(Mutex::new(Status {
-            station: station.clone(),
+            station: String::new(),
             identity_generated: false,
             node_id: String::new(),
             petname: String::new(),
@@ -240,219 +243,329 @@ impl MeshLink {
             error: None,
             connected_at_ms: None,
         }));
-        let (tx, mut rx) =
-            mpsc::channel::<(MeshCommand, oneshot::Sender<Result<String, String>>)>(16);
-        let thread_status = status.clone();
-        let events: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>> =
-            std::sync::Arc::new(Mutex::new(std::collections::VecDeque::new()));
-        let thread_events = events.clone();
-        let roster: std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>> =
-            std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let thread_roster = roster.clone();
-        let public_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>> =
-            std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let thread_public_rooms = public_rooms.clone();
-        let joined_rooms: std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>> =
-            std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let thread_joined_rooms = joined_rooms.clone();
-        let help: std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>> =
-            std::sync::Arc::new(Mutex::new(std::collections::VecDeque::new()));
-        let thread_help = help.clone();
+        let (tx, rx) = mpsc::channel::<(MeshCommand, oneshot::Sender<Result<String, String>>)>(16);
+        let link = MeshLink {
+            status,
+            tx,
+            events: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            roster: Arc::new(Mutex::new(HashMap::new())),
+            public_rooms: Arc::new(Mutex::new(HashMap::new())),
+            joined_rooms: Arc::new(Mutex::new(HashMap::new())),
+            help: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        };
+        let thread = ThreadState {
+            status: link.status.clone(),
+            stores: EventStores {
+                roster: link.roster.clone(),
+                public_rooms: link.public_rooms.clone(),
+                joined: link.joined_rooms.clone(),
+                events: link.events.clone(),
+                help: link.help.clone(),
+            },
+            app,
+            realm: initial_realm,
+        };
         std::thread::spawn(move || {
             let runtime =
                 tokio::runtime::Runtime::new().expect("build tokio runtime for the mesh link");
-            runtime.block_on(async move {
-                // Puzzle-hardened identities are required: an unhardened
-                // one fails the handshake silently (HELLO never accepts).
-                let identity = KeyPair::generate_with_default_puzzle();
-                {
-                    let mut s = thread_status.lock().expect("mesh status lock");
-                    s.identity_generated = true;
-                    s.node_id = hex(&identity.node_id());
-                    s.petname = crate::petname::petname(&s.node_id);
-                }
-                let current: std::sync::Arc<Mutex<[u8; 32]>> =
-                    std::sync::Arc::new(Mutex::new(initial_realm));
-                let own_node = hex(&identity.node_id());
-                let own_petname = crate::petname::petname(&own_node);
-
-                // The link is reconnect-capable: the operating realm is
-                // claimed AT CONNECT TIME (pub/sub delivery is
-                // realm-scoped at the connection level), so a realm
-                // switch drops the session and dials again with the new
-                // membership. Each generation owns its session and its
-                // subscriptions; the stores survive across generations
-                // except the realm-scoped ones, which the switch clears.
-                'outer: loop {
-                    let realm = *current.lock().expect("realm lock");
-                    let mut session =
-                        match connection::connect_in_realm(&station, 4433, Trust::WebPki, &identity, &[realm])
-                            .await
-                        {
-                            Ok(session) => {
-                                {
-                                    let mut s = thread_status.lock().expect("mesh status lock");
-                                    s.connected = true;
-                                    s.error = None;
-                                    s.connected_at_ms = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .ok()
-                                        .map(|d| d.as_millis() as u64);
-                                }
-                                session
-                            }
-                            Err(e) => {
-                                let mut s = thread_status.lock().expect("mesh status lock");
-                                s.connected = false;
-                                s.error = Some(e.to_string());
-                                return;
-                            }
-                        };
-
-                    // One event channel for every subscription: hello,
-                    // the lobby, and the rooms wildcard (the station's
-                    // wildcard rule matches agents.room.* with one
-                    // subscription; route_event filters to JOINED rooms
-                    // locally). Agent-tool subscriptions spawn their own
-                    // forwarding tasks on demand.
-                    let (ev_tx, mut ev_rx) = mpsc::channel::<frame::EventInfo>(512);
-                    // The entire social layer -- presence, central,
-                    // rooms -- lives on the zero realm (macula-mcp
-                    // publishes and receives it all there; the stations
-                    // rebroadcast hellos and the lobby is "the one topic
-                    // everyone keeps watching"). The operating realm
-                    // gates memory and realm-scoped services, not the
-                    // social layer.
-                    let core_topics = [
-                        (HELLO_TOPIC, [0u8; 32]),
-                        (LOBBY_TOPIC, [0u8; 32]),
-                        ("agents.room.*", [0u8; 32]),
-                    ];
-                    for (topic, topic_realm) in core_topics {
-                        let spec =
-                            frame::SubscribeSpec::new(topic, topic_realm, identity.node_id());
-                        if let Ok(sub) = session.subscribe(&spec, &identity).await {
-                            let tx = ev_tx.clone();
-                            tokio::spawn(drain_subscription(sub, tx));
-                        }
-                    }
-                    let mut agent_subs: std::collections::HashMap<
-                        String,
-                        tokio::task::JoinHandle<()>,
-                    > = std::collections::HashMap::new();
-
-                    let mut seq: u64 = 0;
-                    let mut heartbeat = tokio::time::interval(Duration::from_secs(60));
-                    loop {
-                        tokio::select! {
-                            Some((cmd, reply_tx)) = rx.recv() => {
-                                let result = match cmd {
-                                    MeshCommand::Call { procedure, args_json, realm } => {
-                                        mesh_call(&mut session, &identity, &procedure, &args_json, realm).await
-                                    }
-                                    MeshCommand::Publish { topic, payload_json } => {
-                                        seq += 1;
-                                        mesh_publish(&mut session, &identity, &topic, &payload_json, seq).await
-                                    }
-                                    MeshCommand::Subscribe { topic } => {
-                                        let spec = frame::SubscribeSpec::new(&topic, realm, identity.node_id());
-                                        match session.subscribe(&spec, &identity).await {
-                                            Ok(sub) => {
-                                                let tx = ev_tx.clone();
-                                                agent_subs.insert(topic.clone(), tokio::spawn(drain_subscription(sub, tx)));
-                                                Ok(format!("subscribed to {topic}"))
-                                            }
-                                            Err(e) => Err(format!("subscribe failed: {e}")),
-                                        }
-                                    }
-                                    MeshCommand::Unsubscribe { topic } => {
-                                        if let Some(handle) = agent_subs.remove(&topic) {
-                                            handle.abort();
-                                        }
-                                        Ok(format!("unsubscribed from {topic}"))
-                                    }
-                                    MeshCommand::JoinRoom { topic, purpose } => {
-                                        thread_joined_rooms.lock().expect("joined rooms lock").entry(topic.clone()).or_insert(JoinedRoom {
-                                            topic: topic.clone(),
-                                            purpose,
-                                            messages: Vec::new(),
-                                        });
-                                        Ok(format!("joined room {topic}"))
-                                    }
-                                    MeshCommand::LeaveRoom { topic } => {
-                                        thread_joined_rooms.lock().expect("joined rooms lock").remove(&topic);
-                                        Ok(format!("left room {topic}"))
-                                    }
-                                    MeshCommand::SetRealm { tag } => {
-                                        *current.lock().expect("realm lock") = tag;
-                                        thread_roster.lock().expect("roster lock").clear();
-                                        thread_public_rooms.lock().expect("public rooms lock").clear();
-                                        thread_joined_rooms.lock().expect("joined rooms lock").clear();
-                                        thread_events.lock().expect("mesh events lock").clear();
-                                        thread_help.lock().expect("help lock").clear();
-                                        emit_board_changed(&app);
-                                        let _ = reply_tx.send(Ok(format!("operating realm switched (tag {})", hex(&tag))));
-                                        break; // reconnect under the new realm
-                                    }
-                                    MeshCommand::ContentPut { data_b64, name } => {
-                                        mesh_content_put(&mut session, &identity, &data_b64, &name).await
-                                    }
-                                    MeshCommand::ContentGet { mcid_hex } => {
-                                        mesh_content_get(&mut session, &identity, &mcid_hex).await
-                                    }
-                                };
-                                let _ = reply_tx.send(result);
-                            }
-                            _ = heartbeat.tick() => {
-                                seq += 1;
-                                let now_ms = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .map(|d| d.as_millis() as u64)
-                                    .unwrap_or(0);
-                                let payload = json_to_cbor(Some(serde_json::json!({
-                                    "node_id": own_node,
-                                    "citizen_did": own_node,
-                                    "petname": own_petname,
-                                    "connected_via": "macula-desktop",
-                                    "interval_seconds": 60,
-                                    "at": now_ms,
-                                })))
-                                .unwrap_or(Value::Null);
-                                let spec = frame::PublishSpec::new(
-                                    HELLO_TOPIC, [0u8; 32], identity.node_id(), seq, payload, now_ms,
-                                );
-                                let _ = session.publish(&spec, &identity).await;
-                            }
-                            delivery = ev_rx.recv() => {
-                                if let Some(info) = delivery {
-                                    let stores = EventStores {
-                                        roster: thread_roster.clone(),
-                                        public_rooms: thread_public_rooms.clone(),
-                                        joined: thread_joined_rooms.clone(),
-                                        events: thread_events.clone(),
-                                        help: thread_help.clone(),
-                                    };
-                                    route_event(&info, &app, &own_node, &stores);
-                                }
-                            }
-                            else => break 'outer,
-                        }
-                    }
-                    // The session drops here; a SetRealm break re-enters
-                    // the outer loop and reconnects under the new realm.
-                }
-            });
+            runtime.block_on(run_mesh(thread, rx));
         });
-        MeshLink {
-            status,
-            tx,
-            events,
-            roster,
-            public_rooms,
-            joined_rooms,
-            help,
+        link
+    }
+}
+
+/// social_realm is io.macula's realm id, where presence, the lobby and
+/// rooms live.
+fn social_realm() -> [u8; 32] {
+    crate::chat::realm_tag(crate::io_macula::REALM_NAME)
+}
+
+/// operating_realm is the realm calls, agent subscriptions and content
+/// use: the one the user chose, or io.macula when none is set.
+fn operating_realm(tag: [u8; 32]) -> [u8; 32] {
+    if tag == [0u8; 32] {
+        return social_realm();
+    }
+    tag
+}
+
+/// fleet_seeds are the six fleet stations, pinned by node_id.
+fn fleet_seeds() -> Vec<Seed> {
+    crate::io_macula::SEEDS
+        .iter()
+        .map(|(host, port, node_hex)| Seed {
+            host: host.to_string(),
+            port: *port,
+            node_id: hex_decode(node_hex)
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .expect("SEEDS node_ids are 64 hex characters"),
+        })
+        .collect()
+}
+
+/// ThreadState is what the mesh thread owns besides the pool.
+struct ThreadState {
+    status: Arc<Mutex<Status>>,
+    stores: EventStores,
+    app: tauri::AppHandle,
+    realm: [u8; 32],
+}
+
+/// Session is one connected pool and the subscriptions held on it.
+struct Session {
+    pool: Pool,
+    node: String,
+    petname: String,
+    events: mpsc::Sender<Event>,
+    rooms: HashMap<String, tokio::task::JoinHandle<()>>,
+    agent_subs: HashMap<String, tokio::task::JoinHandle<()>>,
+}
+
+/// run_mesh is the mesh thread's whole life: identity, connect, then the
+/// command/event/heartbeat loop until the app drops its sender.
+async fn run_mesh(
+    mut state: ThreadState,
+    mut rx: mpsc::Receiver<(MeshCommand, oneshot::Sender<Result<String, String>>)>,
+) {
+    let identity = match load_identity() {
+        Ok(key) => Arc::new(key),
+        Err(e) => {
+            set_error(&state.status, format!("identity: {e}"));
+            return;
+        }
+    };
+    let pool = connect_until_up(&state.status, identity).await;
+    let node = hex(&pool.node_id());
+    let (ev_tx, mut ev_rx) = mpsc::channel::<Event>(512);
+    let mut session = Session {
+        petname: petname(&node),
+        node,
+        pool,
+        events: ev_tx,
+        rooms: HashMap::new(),
+        agent_subs: HashMap::new(),
+    };
+    for topic in [HELLO_TOPIC, LOBBY_TOPIC] {
+        if let Err(e) = subscribe_into(&session, social_realm(), topic).await {
+            set_error(&state.status, format!("subscribe {topic}: {e}"));
         }
     }
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        tokio::select! {
+            Some((cmd, reply_tx)) = rx.recv() => {
+                let result = handle_command(&mut session, &mut state, cmd).await;
+                let _ = reply_tx.send(result);
+            }
+            _ = heartbeat.tick() => publish_hello(&session).await,
+            Some(event) = ev_rx.recv() => route_event(&event, &state.app, &session.node, &state.stores),
+            else => break,
+        }
+    }
+    session.pool.close().await;
+}
+
+/// load_identity is the node's persistent pq_hybrid identity key, next to
+/// the app's settings, created (puzzle solved) on first run.
+fn load_identity() -> Result<NodeKey, String> {
+    let mut path = crate::chat::settings_path()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .ok_or_else(|| "no settings directory".to_string())?;
+    std::fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    path.push("node.key");
+    NodeKey::load_or_create(&path, Profile::PqHybrid)
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// connect_until_up connects the pool to the fleet, retrying with a
+/// growing pause until one link is up, reporting each failure in Status.
+async fn connect_until_up(status: &Arc<Mutex<Status>>, identity: Arc<NodeKey>) -> Pool {
+    {
+        let mut s = status.lock().expect("mesh status lock");
+        s.identity_generated = true;
+        s.node_id = identity.node_id().map(|id| hex(&id)).unwrap_or_default();
+        s.petname = petname(&s.node_id);
+    }
+    let mut pause = Duration::from_secs(5);
+    loop {
+        let mut opts = Opts::new(identity.clone());
+        opts.realm_trust = HashMap::from([(social_realm(), crate::io_macula::realm_key())]);
+        opts.connect_timeout = Duration::from_secs(60);
+        match Pool::connect(fleet_seeds(), opts).await {
+            Ok(pool) => {
+                mark_connected(status, &pool);
+                return pool;
+            }
+            Err(e) => set_error(
+                status,
+                format!("connect: {e} (retrying in {}s)", pause.as_secs()),
+            ),
+        }
+        tokio::time::sleep(pause).await;
+        pause = (pause * 2).min(Duration::from_secs(60));
+    }
+}
+
+/// mark_connected records the link that came up in Status.
+fn mark_connected(status: &Arc<Mutex<Status>>, pool: &Pool) {
+    let station = pool
+        .status()
+        .into_iter()
+        .find(|l| l.up)
+        .map(|l| l.host)
+        .unwrap_or_default();
+    let mut s = status.lock().expect("mesh status lock");
+    s.station = station;
+    s.connected = true;
+    s.error = None;
+    s.connected_at_ms = Some(now_ms());
+}
+
+/// set_error records an honest error in Status; the link state is
+/// whatever the pool last reported.
+fn set_error(status: &Arc<Mutex<Status>>, error: String) {
+    status.lock().expect("mesh status lock").error = Some(error);
+}
+
+/// subscribe_into subscribes to topic in realm and forwards its
+/// deliveries into the thread's event channel, returning the forwarder.
+async fn subscribe_into(
+    session: &Session,
+    realm: [u8; 32],
+    topic: &str,
+) -> Result<tokio::task::JoinHandle<()>, String> {
+    let sub = session
+        .pool
+        .subscribe(&realm, topic)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(tokio::spawn(drain_subscription(
+        sub,
+        session.events.clone(),
+    )))
+}
+
+/// handle_command runs one command against the session.
+async fn handle_command(
+    session: &mut Session,
+    state: &mut ThreadState,
+    cmd: MeshCommand,
+) -> Result<String, String> {
+    let realm = operating_realm(state.realm);
+    match cmd {
+        MeshCommand::Call {
+            procedure,
+            args_json,
+            realm,
+        } => {
+            mesh_call(
+                &session.pool,
+                &procedure,
+                &args_json,
+                operating_realm(realm),
+            )
+            .await
+        }
+        MeshCommand::Publish {
+            topic,
+            payload_json,
+        } => mesh_publish(&session.pool, &topic, &payload_json).await,
+        MeshCommand::Subscribe { topic } => {
+            let handle = subscribe_into(session, realm, &topic)
+                .await
+                .map_err(|e| format!("subscribe failed: {e}"))?;
+            session.agent_subs.insert(topic.clone(), handle);
+            Ok(format!("subscribed to {topic}"))
+        }
+        MeshCommand::Unsubscribe { topic } => {
+            stop_forwarder(session.agent_subs.remove(&topic));
+            Ok(format!("unsubscribed from {topic}"))
+        }
+        MeshCommand::JoinRoom { topic, purpose } => {
+            join_room_topic(session, state, topic, purpose).await
+        }
+        MeshCommand::LeaveRoom { topic } => {
+            stop_forwarder(session.rooms.remove(&topic));
+            state
+                .stores
+                .joined
+                .lock()
+                .expect("joined rooms lock")
+                .remove(&topic);
+            Ok(format!("left room {topic}"))
+        }
+        MeshCommand::SetRealm { tag } => {
+            state.realm = tag;
+            Ok(format!("operating realm switched (tag {})", hex(&tag)))
+        }
+        MeshCommand::ContentPut { data_b64, name } => {
+            mesh_content_put(&session.pool, realm, &data_b64, &name).await
+        }
+        MeshCommand::ContentGet { mcid_hex } => {
+            mesh_content_get(&session.pool, realm, &mcid_hex).await
+        }
+    }
+}
+
+/// join_room_topic subscribes to a room's own topic in the social realm
+/// and tracks it; a room already joined is left as it is.
+async fn join_room_topic(
+    session: &mut Session,
+    state: &ThreadState,
+    topic: String,
+    purpose: String,
+) -> Result<String, String> {
+    if session.rooms.contains_key(&topic) {
+        return Ok(format!("already in room {topic}"));
+    }
+    let handle = subscribe_into(session, social_realm(), &topic)
+        .await
+        .map_err(|e| format!("join failed: {e}"))?;
+    session.rooms.insert(topic.clone(), handle);
+    state
+        .stores
+        .joined
+        .lock()
+        .expect("joined rooms lock")
+        .entry(topic.clone())
+        .or_insert(JoinedRoom {
+            topic: topic.clone(),
+            purpose,
+            messages: Vec::new(),
+        });
+    emit_board_changed(&state.app);
+    Ok(format!("joined room {topic}"))
+}
+
+/// stop_forwarder ends a subscription's forwarder; dropping its
+/// Subscription unsubscribes.
+fn stop_forwarder(handle: Option<tokio::task::JoinHandle<()>>) {
+    if let Some(handle) = handle {
+        handle.abort();
+    }
+}
+
+/// publish_hello beats this node's presence on agent.hello.
+async fn publish_hello(session: &Session) {
+    let payload = json_to_cbor(Some(serde_json::json!({
+        "node_id": session.node,
+        "citizen_did": session.node,
+        "petname": session.petname,
+        "connected_via": "macula-desktop",
+        "interval_seconds": 60,
+        "at": now_ms(),
+    })))
+    .unwrap_or(Value::Null);
+    let _ = session
+        .pool
+        .publish(Publication {
+            realm: social_realm(),
+            topic: HELLO_TOPIC.to_string(),
+            payload,
+            ttl_ms: None,
+        })
+        .await;
 }
 
 /// EventStores bundles the mesh thread's realm-scoped stores so the
@@ -468,12 +581,7 @@ pub struct EventStores {
 /// route_event sends one delivery to its one true store: lobby
 /// announcements to public rooms, room traffic to joined rooms,
 /// heartbeats to the roster, everything else to the chat feed.
-fn route_event(
-    info: &frame::EventInfo,
-    app: &tauri::AppHandle,
-    own_node: &str,
-    stores: &EventStores,
-) {
+fn route_event(info: &Event, app: &tauri::AppHandle, own_node: &str, stores: &EventStores) {
     let publisher = hex(&info.publisher);
     if info.topic == LOBBY_TOPIC {
         note_lobby(info, &publisher, &stores.public_rooms, &stores.help);
@@ -502,17 +610,13 @@ fn emit_board_changed(app: &tauri::AppHandle) {
 /// note_lobby handles central traffic: room_opened announcements go to
 /// the public-rooms list, help broadcasts to the help store.
 fn note_lobby(
-    info: &frame::EventInfo,
+    info: &Event,
     publisher: &str,
     public_rooms: &std::sync::Arc<Mutex<std::collections::HashMap<String, PublicRoom>>>,
     help: &std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
 ) {
     let payload = event_json(info);
     let kind = payload["kind"].as_str().unwrap_or("");
-    eprintln!(
-        "note_lobby: kind={kind:?} payload={}",
-        event_payload(info).chars().take(120).collect::<String>()
-    );
     if kind == "room_opened" {
         let topic = payload["room_topic"].as_str().unwrap_or("").to_string();
         if topic.is_empty() {
@@ -523,7 +627,7 @@ fn note_lobby(
             PublicRoom {
                 purpose: payload["purpose"].as_str().unwrap_or("").to_string(),
                 topic,
-                opened_by_petname: crate::petname::petname(publisher),
+                opened_by_petname: petname(publisher),
                 seen_at_ms: now_ms(),
             },
         );
@@ -546,7 +650,7 @@ fn note_lobby(
 
 /// note_room_message appends one delivery to its joined room.
 fn note_room_message(
-    info: &frame::EventInfo,
+    info: &Event,
     publisher: &str,
     joined: &std::sync::Arc<Mutex<std::collections::HashMap<String, JoinedRoom>>>,
 ) {
@@ -567,7 +671,7 @@ fn note_room_message(
 
 /// note_roster_entry folds one heartbeat into the presence roster.
 fn note_roster_entry(
-    info: &frame::EventInfo,
+    info: &Event,
     publisher: &str,
     own_node: &str,
     roster: &std::sync::Arc<Mutex<std::collections::HashMap<String, RosterEntry>>>,
@@ -577,7 +681,7 @@ fn note_roster_entry(
         publisher.to_string(),
         RosterEntry {
             node_id: publisher.to_string(),
-            petname: crate::petname::petname(publisher),
+            petname: petname(publisher),
             operator_name: payload["operator_name"].as_str().unwrap_or("").to_string(),
             model: payload["model"].as_str().unwrap_or("").to_string(),
             last_seen_ms: now_ms(),
@@ -589,7 +693,7 @@ fn note_roster_entry(
 /// note_chat_event buffers one delivery for the chat feed and wakes the
 /// auto-react policy.
 fn note_chat_event(
-    info: &frame::EventInfo,
+    info: &Event,
     publisher: &str,
     events: &std::sync::Arc<Mutex<std::collections::VecDeque<MeshEvent>>>,
     app: &tauri::AppHandle,
@@ -613,7 +717,7 @@ fn note_chat_event(
             "topic": event.topic,
             "payload": event.payload,
             "publisher": event.publisher,
-            "publisher_petname": crate::petname::petname(&event.publisher),
+            "publisher_petname": petname(&event.publisher),
             "seq": event.seq,
         }),
     );
@@ -621,12 +725,12 @@ fn note_chat_event(
 }
 
 /// event_payload renders a delivery's payload as a JSON string.
-fn event_payload(info: &frame::EventInfo) -> String {
+fn event_payload(info: &Event) -> String {
     cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// event_json parses a delivery's payload as a JSON value.
-fn event_json(info: &frame::EventInfo) -> serde_json::Value {
+fn event_json(info: &Event) -> serde_json::Value {
     serde_json::from_str(&event_payload(info)).unwrap_or(serde_json::Value::Null)
 }
 
@@ -640,44 +744,39 @@ fn now_ms() -> u64 {
 
 /// drain_subscription forwards one subscription's deliveries into the
 /// thread's single event channel until the subscription ends.
-async fn drain_subscription(mut sub: connection::Subscription, tx: mpsc::Sender<frame::EventInfo>) {
-    while let Ok(event) = sub.recv_event(Duration::from_secs(3600)).await {
+async fn drain_subscription(mut sub: Subscription, tx: mpsc::Sender<Event>) {
+    while let Some(event) = sub.recv().await {
         if tx.send(event).await.is_err() {
             return;
         }
     }
 }
 
-/// mesh_publish sends one fact to a topic. Fire-and-forget by protocol:
-/// success means the frame went out signed, not that anyone heard.
-async fn mesh_publish(
-    session: &mut Session,
-    identity: &KeyPair,
-    topic: &str,
-    payload_json: &str,
-    seq: u64,
-) -> Result<String, String> {
+/// mesh_publish sends one fact to a topic in the social realm.
+/// Fire-and-forget by protocol: success means the publication went out
+/// signed, not that anyone heard.
+async fn mesh_publish(pool: &Pool, topic: &str, payload_json: &str) -> Result<String, String> {
     if topic.trim().is_empty() {
         return Err("publish requires a topic".to_string());
     }
     let payload = json_to_cbor(serde_json::from_str::<serde_json::Value>(payload_json).ok())
         .map_err(|e| format!("invalid payload: {e}"))?;
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let spec = frame::PublishSpec::new(topic, [0u8; 32], identity.node_id(), seq, payload, now_ms);
-    session
-        .publish(&spec, identity)
-        .await
-        .map_err(|e| format!("publish failed: {e}"))?;
-    Ok(format!("published to {topic} (seq {seq})"))
+    pool.publish(Publication {
+        realm: social_realm(),
+        topic: topic.to_string(),
+        payload,
+        ttl_ms: None,
+    })
+    .await
+    .map_err(|e| format!("publish failed: {e}"))?;
+    Ok(format!("published to {topic}"))
 }
 
-/// mesh_content_put stores bytes as content and returns the MCID.
+/// mesh_content_put shares bytes from this node in realm and returns the
+/// MCID hex. The node serves the content while the app runs.
 async fn mesh_content_put(
-    session: &mut Session,
-    identity: &KeyPair,
+    pool: &Pool,
+    realm: [u8; 32],
     data_b64: &str,
     name: &str,
 ) -> Result<String, String> {
@@ -685,34 +784,26 @@ async fn mesh_content_put(
     let data = base64::engine::general_purpose::STANDARD
         .decode(data_b64)
         .map_err(|e| format!("bad base64: {e}"))?;
-    let mcid = content::put(session, &data, name, identity)
+    let mcid = pool
+        .share_content(&realm, &data, name)
         .await
-        .map_err(|e| format!("content put failed: {e}"))?;
+        .map_err(|e| format!("content share failed: {e}"))?;
     Ok(mcid.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// mesh_content_get fetches content by MCID hex; text comes back as
-/// text, anything else reports its size.
-async fn mesh_content_get(
-    session: &mut Session,
-    identity: &KeyPair,
-    mcid_hex: &str,
-) -> Result<String, String> {
-    let bytes = hex_decode(mcid_hex)?;
-    let mut mcid = [0u8; 34];
-    if bytes.len() != 34 {
-        return Err("an MCID is 34 bytes (68 hex chars)".to_string());
-    }
-    mcid.copy_from_slice(&bytes);
-    let data = content::get(session, mcid, identity)
+/// mesh_content_get fetches content by MCID hex from the nodes sharing
+/// it; text comes back as text, anything else reports its size.
+async fn mesh_content_get(pool: &Pool, realm: [u8; 32], mcid_hex: &str) -> Result<String, String> {
+    let mcid: [u8; 50] = hex_decode(mcid_hex)?
+        .try_into()
+        .map_err(|_| "an MCID is 50 bytes (100 hex chars)".to_string())?;
+    let data = pool
+        .get_content(&realm, &mcid, ContentOptions::default())
         .await
         .map_err(|e| format!("content get failed: {e}"))?;
     match String::from_utf8(data) {
         Ok(text) => Ok(text),
-        Err(e) => {
-            let n = e.into_bytes().len();
-            Ok(format!("binary content, {n} bytes"))
-        }
+        Err(e) => Ok(format!("binary content, {} bytes", e.into_bytes().len())),
     }
 }
 
@@ -727,43 +818,28 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-/// mesh_call invokes one procedure through the live session: JSON args
-/// in, JSON result (or a BOLT error) out, 30s deadline, in the given
-/// realm.
+/// mesh_call invokes one procedure by direct dial: JSON args in, JSON
+/// result (or the provider's or the pool's error) out, 30 s timeout, in
+/// the given realm.
 async fn mesh_call(
-    session: &mut Session,
-    identity: &KeyPair,
+    pool: &Pool,
     procedure: &str,
     args_json: &str,
     realm: [u8; 32],
 ) -> Result<String, String> {
-    let payload = match json_to_cbor(serde_json::from_str::<serde_json::Value>(args_json).ok()) {
-        Ok(v) => v,
-        Err(e) => return Err(format!("invalid arguments: {e}")),
-    };
-    let deadline = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i128 + 30_000)
-        .unwrap_or(30_000);
-    match session
-        .call(
-            procedure,
+    let payload = json_to_cbor(serde_json::from_str::<serde_json::Value>(args_json).ok())
+        .map_err(|e| format!("invalid arguments: {e}"))?;
+    let result = pool
+        .call(Call {
             realm,
+            procedure: procedure.to_string(),
             payload,
-            deadline,
-            identity,
-            Duration::from_secs(30),
-        )
+            timeout: Duration::from_secs(30),
+            ..Call::default()
+        })
         .await
-    {
-        Ok(CallResponse::Result { payload, .. }) => {
-            cbor_to_json(&payload).map_err(|e| format!("decode result: {e}"))
-        }
-        Ok(CallResponse::Error { name, detail, .. }) => {
-            Err(format!("{name}: {}", detail.unwrap_or_default()))
-        }
-        Err(e) => Err(format!("call failed: {e}")),
-    }
+        .map_err(|e| format!("call failed: {e}"))?;
+    cbor_to_json(&result).map_err(|e| format!("decode result: {e}"))
 }
 
 /// json_to_cbor maps a parsed JSON value onto the SDK's cbor::Value so
@@ -897,4 +973,116 @@ pub async fn leave_room(link: tauri::State<'_, MeshLink>, topic: String) -> Resu
 
 fn hex(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_fleet_seeds_are_six_stations_pinned_by_node_id() {
+        let seeds = fleet_seeds();
+        assert_eq!(seeds.len(), 6);
+        assert!(seeds
+            .iter()
+            .all(|s| s.port == 4433 && s.node_id != [0u8; 32]));
+    }
+
+    #[test]
+    fn the_io_macula_realm_key_is_its_public_pq_hybrid_key() {
+        assert_eq!(crate::io_macula::realm_key().len(), 3118);
+    }
+
+    #[test]
+    fn the_social_realm_is_io_macula() {
+        assert_eq!(
+            hex(&social_realm()),
+            "abb81b5a614b63551b400b810648c0c8a78efad845442630c94b46cc95d2fcd1"
+        );
+    }
+
+    #[test]
+    fn no_operating_realm_means_io_macula_and_a_chosen_one_is_kept() {
+        assert_eq!(operating_realm([0u8; 32]), social_realm());
+        assert_eq!(operating_realm([7u8; 32]), [7u8; 32]);
+    }
+
+    #[test]
+    fn an_mcid_of_the_wrong_length_is_refused_before_any_fetch() {
+        assert!(hex_decode("abcd").unwrap().len() == 2);
+        assert!(hex_decode("abc").is_err());
+    }
+
+    /// A live session against the fleet through this module's own path:
+    /// connect_until_up (pinned seeds, io.macula trust) under a key made
+    /// for the run, mesh_call to mcl-echo/echo, and a publication heard
+    /// through subscribe_into. Run with `cargo test -- --ignored live_`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "live: reaches the fleet"]
+    async fn live_session_on_the_fleet() {
+        let status = Arc::new(Mutex::new(Status {
+            station: String::new(),
+            identity_generated: false,
+            node_id: String::new(),
+            petname: String::new(),
+            connected: false,
+            error: None,
+            connected_at_ms: None,
+        }));
+        let key = Arc::new(
+            NodeKey::generate_identity(Profile::PqHybrid, macula_rust::node_key::PUZZLE_DIFFICULTY)
+                .unwrap(),
+        );
+        let started = std::time::Instant::now();
+        let pool = connect_until_up(&status, key).await;
+        let station = status.lock().unwrap().station.clone();
+        eprintln!("linked to {station} in {:?}", started.elapsed());
+
+        let started = std::time::Instant::now();
+        let echoed = mesh_call(
+            &pool,
+            "mcl-echo/echo",
+            "\"hello from desktop\"",
+            social_realm(),
+        )
+        .await;
+        eprintln!("mcl-echo/echo in {:?}: {echoed:?}", started.elapsed());
+        assert_eq!(echoed.unwrap(), "\"hello from desktop\"");
+
+        let (tx, mut rx) = mpsc::channel::<Event>(8);
+        let session = Session {
+            node: hex(&pool.node_id()),
+            petname: String::new(),
+            pool,
+            events: tx,
+            rooms: HashMap::new(),
+            agent_subs: HashMap::new(),
+        };
+        let topic = format!(
+            "macula-desktop/live/check/publication_heard_v1/{}",
+            now_ms()
+        );
+        let forwarder = subscribe_into(&session, social_realm(), &topic)
+            .await
+            .unwrap();
+        let mut heard = None;
+        for _ in 0..10 {
+            mesh_publish(&session.pool, &topic, "\"heard\"")
+                .await
+                .unwrap();
+            if let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
+                heard = Some(event);
+                break;
+            }
+        }
+        forwarder.abort();
+        session.pool.close().await;
+        let event = heard.expect("the publication was never heard");
+        assert_eq!(event_payload(&event), "\"heard\"");
+        assert_eq!(
+            event.publisher,
+            hex_decode(&session.node).unwrap().as_slice()
+        );
+        eprintln!("heard own publication on {topic}");
+    }
 }

@@ -47,17 +47,27 @@ the window is closed, which a terminal cannot do at all.
 
 ## Status
 
-**Walking skeleton.** What works end-to-end today:
+**Early.** The Rust core runs on `macula-rust` 0.5.1 (the macula 12/13
+wire, handshake v4, which today's stations accept):
 
-- the five-tab shell (Mesh / Chat / Teams / Services / Realms),
-- the invoke-only IPC path,
-- a real mesh link in the Rust core: puzzle-hardened identity, QUIC
-  handshake to `station-de-frankfurt.macula.io:4433`, session held for
-  the app's lifetime, live status in the Mesh tab.
+- a pool linked to the six fleet stations, each pinned by the node_id it
+  must prove, redialing any link that ends, under a persistent pq_hybrid
+  identity (`node.key` next to the app's settings, admission puzzle
+  solved on first run), trusting the io.macula realm key;
+- the social layer in io.macula, where macula-mcp publishes it:
+  `agent.hello` presence (a heartbeat every 60 s and the roster), the
+  `agents.lobby` room announcements and help broadcasts, and each joined
+  room on its own topic;
+- calls by direct dial in the operating realm (io.macula when none is
+  chosen), including the `mcl-rag/*` memory procedures, and node-served
+  content;
+- the five-tab shell (Mesh / Chat / Teams / Services / Realms) over the
+  invoke-only IPC path.
 
-Chat over rooms, the Teams board, the services catalog, and realm
-membership are the next layers on top of this link; their tabs say so
-honestly.
+The core's live path (connect, a call to `mcl-echo/echo`, hearing its own
+publication) is checked against the fleet by an ignored test:
+`cargo test -- --ignored live_`. Handshake v5 arrives with a later
+`macula-rust` release as an ordinary version update.
 
 ## Install
 

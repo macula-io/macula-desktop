@@ -111,7 +111,7 @@ impl Envelope {
     fn item(&self, message: &MeshEvent) -> TeamItem {
         let who = message.publisher.clone();
         TeamItem {
-            petname: crate::petname::petname(&who),
+            petname: macula_rust::petname::petname(&who),
             who,
             text: self.text.clone(),
             room: short_topic(&message.topic),
