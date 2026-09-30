@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-09-30
+
+### Changed
+
+- The mesh core is on `macula-rust` 0.6: every station link dials handshake
+  v5, bound to its TLS session, and a call to a provider that advertises a
+  KEM key is never made in the clear.
+- Chat's memory step after each answer runs in its own function, within the
+  house nesting limit.
+
 ## [0.1.0] - 2026-09-29
 
 The first release: a desktop client that holds a real session on the

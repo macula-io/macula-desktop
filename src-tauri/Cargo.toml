@@ -1,6 +1,6 @@
 [package]
 name = "macula-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Desktop GUI for the Macula mesh: Tauri shell over the macula-rust SDK"
 edition = "2021"
 
