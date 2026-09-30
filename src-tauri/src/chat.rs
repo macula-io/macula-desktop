@@ -365,13 +365,7 @@ fn run_user_turn(app: tauri::AppHandle) {
     runtime.block_on(async {
         let state = app.state::<ChatState>();
         let link = app.state::<crate::mesh::MeshLink>();
-        let history: Vec<ChatMessage> = state
-            .history
-            .lock()
-            .expect("chat history lock")
-            .iter()
-            .cloned()
-            .collect();
+        let history = history_snapshot(&state);
         let memory_on = *state.memory.lock().expect("chat policy lock");
         let memory_realm = memory_realm(&state);
         let memory_text = if memory_on {
@@ -384,18 +378,33 @@ fn run_user_turn(app: tauri::AppHandle) {
         let _ = app.emit("chat-done", ());
         record_answer(&app, &state, result);
         if memory_on {
-            let history: Vec<ChatMessage> = state
-                .history
-                .lock()
-                .expect("chat history lock")
-                .iter()
-                .cloned()
-                .collect();
-            if let Ok(summary) = summarize_turn(&history).await {
-                remember_turn(&link, &summary, memory_realm).await;
-            }
+            remember_latest_turn(&state, &link, memory_realm).await;
         }
     });
+}
+
+/// history_snapshot copies the shared chat history out of its lock.
+fn history_snapshot(state: &ChatState) -> Vec<ChatMessage> {
+    state
+        .history
+        .lock()
+        .expect("chat history lock")
+        .iter()
+        .cloned()
+        .collect()
+}
+
+/// remember_latest_turn summarizes the history as it stands after the
+/// answer was recorded and stores that summary as memory.
+async fn remember_latest_turn(
+    state: &ChatState,
+    link: &crate::mesh::MeshLink,
+    memory_realm: [u8; 32],
+) {
+    let history = history_snapshot(state);
+    if let Ok(summary) = summarize_turn(&history).await {
+        remember_turn(link, &summary, memory_realm).await;
+    }
 }
 
 /// memory_realm derives the operating realm's tag from its NAME:

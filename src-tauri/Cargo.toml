@@ -16,7 +16,7 @@ tauri = { version = "2", features = [] }
 # The published SDK crate from crates.io -- the ONLY macula-io dependency,
 # per the exploration doc's constraint (SDKs only, no lazymesh/macula-cli),
 # and only ever a released version (never a git, path or branch dependency).
-macula-rust = "0.5.1"
+macula-rust = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The chat module's LLM calls (OpenAI-compatible endpoint) -- made from

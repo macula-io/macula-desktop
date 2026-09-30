@@ -2580,9 +2580,9 @@ dependencies = [
 
 [[package]]
 name = "macula-rust"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfb92c395286492112f7a98f7bb4eecc282d7829e2b7acc03c9fc80243d57e20"
+checksum = "cb69dfa9e1f60e6e93d4f2073bf7cc59338a787d7642d4a5897700b8934d1e05"
 dependencies = [
  "apple-native-keyring-store",
  "aws-lc-rs",
