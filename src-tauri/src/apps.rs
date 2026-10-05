@@ -3,7 +3,7 @@
 //! still never touches the network: clicking a local application hands
 //! its URL to the OPERATING SYSTEM's browser (or embeds it, origin-
 //! isolated), and mesh applications resolve through the mesh once the
-//! DHT-discovery slice lands.
+//! DHT-discovery slice lands (macula-io/macula-desktop#1).
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

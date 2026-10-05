@@ -33,7 +33,7 @@ mouse selection as a reverse-video overlay. A webview does all of that
 natively — and a desktop app can hold mesh presence in the tray while
 the window is closed, which a terminal cannot do at all.
 
-**The invariants (from `plans/EXPLORATION_MACULA_DESKTOP.md`):**
+**The invariants:**
 
 - **SDKs only** — the only macula-io dependency is the published
   `macula-rust` crate; no macula-lazymesh, no macula-cli, no prior art.
@@ -123,8 +123,8 @@ cargo build                        # plain debug binary in target/debug/
 The Rust core is the mesh client (identity, rooms, pub/sub, RPC, DHT,
 realm membership via `macula-rust`); the webview renders and never
 touches the network; Tauri IPC in between, with each command an
-explicitly registered function. Full design and rationale:
-[`plans/EXPLORATION_MACULA_DESKTOP.md`](plans/EXPLORATION_MACULA_DESKTOP.md).
+explicitly registered function. Planned work is tracked in
+[issues labelled `plan`](https://github.com/macula-io/macula-desktop/issues?q=is%3Aissue+is%3Aopen+label%3Aplan).
 
 ## License
 
