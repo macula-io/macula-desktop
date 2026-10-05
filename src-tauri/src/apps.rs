@@ -1,4 +1,4 @@
-//! Applications: the LAN and mesh faces of hecate services, declared
+//! Applications: the LAN and mesh faces of mesh services, declared
 //! and managed by the operator through the app itself. The webview
 //! still never touches the network: clicking a local application hands
 //! its URL to the OPERATING SYSTEM's browser (or embeds it, origin-

@@ -60,7 +60,7 @@ pub struct ChatState {
     /// approve_all: every gated tool in the CURRENT turn auto-approves;
     /// reset when the turn starts.
     pub approve_all: std::sync::Mutex<bool>,
-    /// memory: recall/remember against hecate-rag (see Settings).
+    /// memory: recall/remember against mcl-rag (see Settings).
     pub memory: std::sync::Mutex<bool>,
     /// realm: the operating realm name; its tag derives via sha256.
     pub realm: std::sync::Mutex<String>,
@@ -182,7 +182,7 @@ pub fn chat_interrupt(state: tauri::State<'_, ChatState>) -> Result<(), String> 
 pub struct Settings {
     #[serde(default)]
     pub auto_react: bool,
-    /// memory: recall from hecate-rag at turn start and remember an
+    /// memory: recall from mcl-rag at turn start and remember an
     /// outcome summary at turn end. Opt-in: memory is shared and mesh
     /// payloads are not end-to-end encrypted, so nothing is ever
     /// written without the operator turning this on.
@@ -564,7 +564,7 @@ fn ground_messages(
     let memory_block = if memory_text.is_empty() {
         String::new()
     } else {
-        format!("Relevant memory recalled from the mesh (hecate-rag):\n{memory_text}\n")
+        format!("Relevant memory recalled from the mesh (mcl-rag):\n{memory_text}\n")
     };
     let system = format!(
         "You are the operator's personal agent inside macula-desktop, a desktop app for the Macula mesh. \
@@ -946,7 +946,7 @@ static TOOLS: std::sync::LazyLock<Vec<serde_json::Value>> = std::sync::LazyLock:
     ]
 });
 
-/// recall_memory asks hecate-rag for anything relevant to the query.
+/// recall_memory asks mcl-rag for anything relevant to the query.
 /// Best-effort: memory failures never break a turn, they just leave it
 /// ungrounded.
 async fn recall_memory(link: &crate::mesh::MeshLink, query: &str, realm: [u8; 32]) -> String {
@@ -970,7 +970,7 @@ async fn recall_memory(link: &crate::mesh::MeshLink, query: &str, realm: [u8; 32
     }
 }
 
-/// remember_turn deposits one summary into hecate-rag. Best-effort,
+/// remember_turn deposits one summary into mcl-rag. Best-effort,
 /// like recall.
 async fn remember_turn(link: &crate::mesh::MeshLink, summary: &str, realm: [u8; 32]) {
     if summary.trim().is_empty() {
@@ -991,7 +991,7 @@ async fn remember_turn(link: &crate::mesh::MeshLink, summary: &str, realm: [u8; 
 }
 
 /// summarize_turn distills the recent exchange into at most two
-/// sentences of first-person memory -- the shape hecate-rag is meant
+/// sentences of first-person memory -- the shape mcl-rag is meant
 /// to hold, never a raw transcript.
 async fn summarize_turn(
     history: &[ChatMessage],
