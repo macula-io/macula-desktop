@@ -16,6 +16,7 @@ mod chat;
 mod io_macula;
 mod mesh;
 mod teams;
+mod tray;
 
 use tauri::Manager;
 
@@ -30,8 +31,10 @@ pub fn run() {
             let chat_state = chat::ChatState::default();
             chat::load_transcript(&chat_state);
             app.manage(chat_state);
+            tray::install(app.handle())?;
             Ok(())
         })
+        .on_window_event(tray::hide_on_close)
         .invoke_handler(tauri::generate_handler![
             mesh::mesh_status,
             mesh::roster,

@@ -12,7 +12,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# tray-icon: tray mode keeps mesh presence while the window is closed.
+tauri = { version = "2", features = ["tray-icon"] }
 # The published SDK crate from crates.io -- the ONLY macula-io dependency,
 # per the exploration doc's constraint (SDKs only, no lazymesh/macula-cli),
 # and only ever a released version (never a git, path or branch dependency).

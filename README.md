@@ -47,8 +47,8 @@ the window is closed, which a terminal cannot do at all.
 
 ## Status
 
-**Early.** The Rust core runs on `macula-rust` 0.5.1 (the macula 12/13
-wire, handshake v4, which today's stations accept):
+**Early.** The Rust core runs on `macula-rust` 0.6 (the macula 13 wire,
+handshake v5, bound to its TLS session):
 
 - a pool linked to the six fleet stations, each pinned by the node_id it
   must prove, redialing any link that ends, under a persistent pq_hybrid
@@ -62,12 +62,13 @@ wire, handshake v4, which today's stations accept):
   chosen), including the `mcl-rag/*` memory procedures, and node-served
   content;
 - the five-tab shell (Mesh / Chat / Teams / Services / Realms) over the
-  invoke-only IPC path.
+  invoke-only IPC path;
+- tray mode: closing the window hides it and the mesh session stays up;
+  the tray menu shows the window again or quits the app.
 
 The core's live path (connect, a call to `mcl-echo/echo`, hearing its own
 publication) is checked against the fleet by an ignored test:
-`cargo test -- --ignored live_`. Handshake v5 arrives with a later
-`macula-rust` release as an ordinary version update.
+`cargo test -- --ignored live_`.
 
 ## Install
 

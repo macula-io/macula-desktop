@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Tray mode: closing the window hides it, and the mesh session (presence,
+  joined rooms) stays up. The tray menu shows the window again or quits
+  (macula-desktop#1).
+
 ## [0.2.0] - 2026-09-30
 
 ### Changed
