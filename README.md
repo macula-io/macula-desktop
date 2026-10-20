@@ -48,8 +48,8 @@ the window is closed, which a terminal cannot do at all.
 
 ## Status
 
-**Early.** The Rust core runs on `macula-rust` 0.6 (the macula 13 wire,
-handshake v5, bound to its TLS session):
+**Early.** The Rust core runs on `macula-rust` 0.11 (wire 1.0, the wire the
+fleet has spoken since 2026-10-19):
 
 - a pool linked to the six fleet stations, each pinned by the node_id it
   must prove, redialing any link that ends, under a persistent pq_hybrid

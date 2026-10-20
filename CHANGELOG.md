@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The mesh core is on `macula-rust` 0.11, the wire 1.0 final, the wire the
+  fleet has spoken since 2026-10-19. A publication's payload is the SDK's
+  `Payload`: what this app publishes goes out as `Payload::Clear`, and a
+  sealed group event, which it holds no epoch key for, renders as a
+  `{"sealed": true, "seal_key_id": ...}` marker rather than an empty object.
+
 ### Added
 
 - Tray mode: closing the window hides it, and the mesh session (presence,

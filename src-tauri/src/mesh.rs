@@ -15,6 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use macula_rust::{
     cbor::Value,
+    frame::Payload,
     node_key::NodeKey,
     petname::petname,
     pool::{Call, ContentOptions, Opts, Pool, Seed, Subscription},
@@ -562,7 +563,7 @@ async fn publish_hello(session: &Session) {
         .publish(Publication {
             realm: social_realm(),
             topic: HELLO_TOPIC.to_string(),
-            payload,
+            payload: Payload::Clear(payload),
             ttl_ms: None,
         })
         .await;
@@ -724,9 +725,20 @@ fn note_chat_event(
     crate::chat::maybe_react(app);
 }
 
-/// event_payload renders a delivery's payload as a JSON string.
+/// event_payload renders a delivery's payload as a JSON string. A sealed
+/// group event is ciphertext this app holds no epoch key for, so it renders
+/// the marker below and never an empty object: what arrived is not nothing.
 fn event_payload(info: &Event) -> String {
-    cbor_to_json(&info.payload).unwrap_or_else(|_| "{}".to_string())
+    match &info.payload {
+        Payload::Clear(value) => cbor_to_json(value).unwrap_or_else(|_| "{}".to_string()),
+        Payload::Sealed(_) => serde_json::json!({
+            "sealed": true,
+            "seal_key_id": info
+                .seal_key_id
+                .map(|id| id.iter().map(|b| format!("{b:02x}")).collect::<String>()),
+        })
+        .to_string(),
+    }
 }
 
 /// event_json parses a delivery's payload as a JSON value.
@@ -764,7 +776,7 @@ async fn mesh_publish(pool: &Pool, topic: &str, payload_json: &str) -> Result<St
     pool.publish(Publication {
         realm: social_realm(),
         topic: topic.to_string(),
-        payload,
+        payload: Payload::Clear(payload),
         ttl_ms: None,
     })
     .await

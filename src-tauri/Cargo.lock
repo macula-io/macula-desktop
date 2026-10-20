@@ -2580,12 +2580,13 @@ dependencies = [
 
 [[package]]
 name = "macula-rust"
-version = "0.6.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb69dfa9e1f60e6e93d4f2073bf7cc59338a787d7642d4a5897700b8934d1e05"
+checksum = "03de8bac0ffe88738b150106e5f071e5c76c9820a25d636a57c4f7c9cb2eee32"
 dependencies = [
  "apple-native-keyring-store",
  "aws-lc-rs",
+ "base64 0.22.1",
  "keyring",
  "keyring-core",
  "linux-keyutils-keyring-store",
@@ -2594,8 +2595,11 @@ dependencies = [
  "quinn",
  "rustix",
  "rustls",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
  "tokio",
+ "windows-native-keyring-store",
 ]
 
 [[package]]
@@ -4722,7 +4726,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
