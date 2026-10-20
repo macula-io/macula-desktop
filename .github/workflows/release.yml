@@ -73,8 +73,16 @@ jobs:
           name: ${{ matrix.target }}
           path: out/${{ matrix.asset }}.${{ matrix.archive }}
 
+  # NOTHING IS RELEASED WHILE ITS OWN TESTS ARE RED: ci.yml on this
+  # commit, and the release waits on it (mcl-om#34).
+  tests:
+    # The workflow grants contents: write for the release; the tests need read.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   release:
-    needs: build
+    needs: [build, tests]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

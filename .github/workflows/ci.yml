@@ -1,6 +1,9 @@
 name: ci
 
 on:
+  # release.yml runs this on the commit it releases and publishes only
+  # when it is green (mcl-om#34).
+  workflow_call:
   push:
     branches: [main]
   pull_request:
@@ -48,6 +51,12 @@ jobs:
       - name: Lint (clippy, warnings denied)
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
+
+      # The unit tests existed and nothing ran them; release.yml now waits on
+      # this workflow, so they gate the release too (mcl-om#34).
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --locked
 
   lint-nesting:
     runs-on: ubuntu-latest
