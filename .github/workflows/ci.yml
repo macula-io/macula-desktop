@@ -66,7 +66,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly-2026-05-28
-          components: rustc-dev,llvm-tools-preview
+          components: rustc-dev,llvm-tools-preview,clippy
 
       - name: Install Linux system dependencies (WebKitGTK)
         run: |
@@ -79,6 +79,10 @@ jobs:
         run: |
           curl -LsSf https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-x86_64-unknown-linux-gnu.tgz | tar xzf - -C ~/.cargo/bin
           cargo binstall -y cargo-dylint dylint-link
+
+      - name: Lint the lint crate (clippy, warnings denied)
+        working-directory: linting
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Run the nesting-depth lint (deny level, fails the build)
         working-directory: linting

@@ -2,7 +2,6 @@
 #![warn(unused_extern_crates)]
 
 extern crate rustc_hir;
-extern crate rustc_middle;
 extern crate rustc_span;
 
 use rustc_hir::intravisit::{self, Visitor};
@@ -54,6 +53,26 @@ struct DepthVisitor {
     max_depth: usize,
 }
 
+impl DepthVisitor {
+    /// enter records one counted construct: the deepest level seen, and
+    /// the third level's span (the house maximum is two levels, so the
+    /// third is the offending one).
+    fn enter(&mut self, span: Span) {
+        self.depth += 1;
+        if self.depth > self.max_depth {
+            self.max_depth = self.depth;
+        }
+        if self.depth == 3 {
+            self.offending = span;
+        }
+    }
+
+    /// leave steps back out of a counted construct.
+    fn leave(&mut self) {
+        self.depth -= 1;
+    }
+}
+
 impl<'tcx> Visitor<'tcx> for DepthVisitor {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         // Macro expansions (tokio::select!, tauri handlers) generate
@@ -69,17 +88,11 @@ impl<'tcx> Visitor<'tcx> for DepthVisitor {
             ExprKind::If(..) | ExprKind::Match(..) | ExprKind::Loop(..)
         );
         if counted {
-            self.depth += 1;
-            if self.depth > self.max_depth {
-                self.max_depth = self.depth;
-            }
-            if self.depth == 3 {
-                self.offending = expr.span;
-            }
+            self.enter(expr.span);
         }
         intravisit::walk_expr(self, expr);
         if counted {
-            self.depth -= 1;
+            self.leave();
         }
     }
 }

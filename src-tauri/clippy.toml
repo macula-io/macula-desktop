@@ -1,0 +1,6 @@
+# Hard limits on a function's shape, denied in Cargo.toml's [lints.clippy]
+# and so gated by the clippy step in .github/workflows/ci.yml. The dylint
+# nesting lint in linting/ measures the same thing from the other side.
+excessive-nesting-threshold = 3
+cognitive-complexity-threshold = 15
+too-many-lines-threshold = 60

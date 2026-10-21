@@ -883,6 +883,15 @@ fn json_to_cbor(v: Option<serde_json::Value>) -> Result<Value, String> {
     }
 }
 
+/// json_key renders one cbor map key as a JSON object key.
+fn json_key(k: &Value) -> String {
+    match k {
+        Value::Text(s) => s.clone(),
+        Value::Int(i) => i.to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
 /// cbor_to_json renders a procedure result as JSON for the agent.
 fn cbor_to_json(v: &Value) -> Result<String, String> {
     fn inner(v: &Value) -> Result<serde_json::Value, String> {
@@ -898,25 +907,18 @@ fn cbor_to_json(v: &Value) -> Result<String, String> {
             Value::Bytes(b) => {
                 serde_json::Value::String(b.iter().map(|x| format!("{x:02x}")).collect())
             }
-            Value::List(items) => {
-                let mut out = Vec::with_capacity(items.len());
-                for item in items {
-                    out.push(inner(item)?);
-                }
-                serde_json::Value::Array(out)
-            }
-            Value::Map(pairs) => {
-                let mut map = serde_json::Map::new();
-                for (k, val) in pairs {
-                    let key = match k {
-                        Value::Text(s) => s.clone(),
-                        Value::Int(i) => i.to_string(),
-                        other => format!("{other:?}"),
-                    };
-                    map.insert(key, inner(val)?);
-                }
-                serde_json::Value::Object(map)
-            }
+            Value::List(items) => serde_json::Value::Array(
+                items
+                    .iter()
+                    .map(inner)
+                    .collect::<Result<Vec<_>, String>>()?,
+            ),
+            Value::Map(pairs) => serde_json::Value::Object(
+                pairs
+                    .iter()
+                    .map(|(k, val)| Ok((json_key(k), inner(val)?)))
+                    .collect::<Result<serde_json::Map<_, _>, String>>()?,
+            ),
         })
     }
     serde_json::to_string(&inner(v)?).map_err(|e| e.to_string())
@@ -985,6 +987,24 @@ pub async fn leave_room(link: tauri::State<'_, MeshLink>, topic: String) -> Resu
 
 fn hex(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// publish_until_heard is the live check's publisher: republish on the
+/// topic until one of the deliveries reaches the subscriber, ten rounds
+/// at three seconds each.
+#[cfg(test)]
+async fn publish_until_heard(
+    pool: &Pool,
+    topic: &str,
+    rx: &mut mpsc::Receiver<Event>,
+) -> Option<Event> {
+    for _ in 0..10 {
+        mesh_publish(pool, topic, "\"heard\"").await.unwrap();
+        if let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
+            return Some(event);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1077,16 +1097,7 @@ mod tests {
         let forwarder = subscribe_into(&session, social_realm(), &topic)
             .await
             .unwrap();
-        let mut heard = None;
-        for _ in 0..10 {
-            mesh_publish(&session.pool, &topic, "\"heard\"")
-                .await
-                .unwrap();
-            if let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
-                heard = Some(event);
-                break;
-            }
-        }
+        let heard = publish_until_heard(&session.pool, &topic, &mut rx).await;
         forwarder.abort();
         session.pool.close().await;
         let event = heard.expect("the publication was never heard");

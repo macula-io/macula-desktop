@@ -231,6 +231,23 @@ fn append_transcript(role: &str, content: &str) {
     }
 }
 
+/// transcript_turn parses one JSONL line into a turn. A line that is not
+/// a well-formed role/content record is no turn at all.
+fn transcript_turn(line: &str) -> Option<ChatMessage> {
+    let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    let role = v["role"].as_str().unwrap_or("");
+    let content = v["content"].as_str().unwrap_or("");
+    if role.is_empty() || content.is_empty() {
+        return None;
+    }
+    Some(ChatMessage {
+        role: role.to_string(),
+        content: content.to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+    })
+}
+
 /// load_transcript restores the most recent conversation turns into
 /// the in-memory history. A missing or corrupt file is an empty
 /// history, not an error.
@@ -241,23 +258,22 @@ pub fn load_transcript(state: &ChatState) {
     let Ok(text) = std::fs::read_to_string(path) else {
         return;
     };
-    let mut turns: Vec<ChatMessage> = Vec::new();
-    for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-            let role = v["role"].as_str().unwrap_or("").to_string();
-            let content = v["content"].as_str().unwrap_or("").to_string();
-            if !role.is_empty() && !content.is_empty() {
-                turns.push(ChatMessage {
-                    role,
-                    content,
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
-            }
-        }
-    }
+    let turns: Vec<ChatMessage> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(transcript_turn)
+        .collect();
     let keep = turns.len().saturating_sub(200);
     *state.history.lock().expect("chat history lock") = turns[keep..].to_vec();
+}
+
+/// home_config_dir is `$HOME/.config`, the fallback when
+/// `XDG_CONFIG_HOME` is unset or empty.
+fn home_config_dir() -> Option<std::ffi::OsString> {
+    let home = std::env::var_os("HOME")?;
+    let mut p = PathBuf::from(&home);
+    p.push(".config");
+    Some(p.into_os_string())
 }
 
 pub(crate) fn settings_path() -> Option<PathBuf> {
@@ -266,13 +282,7 @@ pub(crate) fn settings_path() -> Option<PathBuf> {
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
             .filter(|v| !v.is_empty())
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| {
-                    let mut p = PathBuf::from(&h);
-                    p.push(".config");
-                    p.into_os_string()
-                })
-            })
+            .or_else(home_config_dir)
     }?;
     let mut path = PathBuf::from(dir);
     path.push("macula-desktop");
@@ -492,34 +502,57 @@ pub fn maybe_react(app: &tauri::AppHandle) {
     begin_turn(&app.state::<ChatState>());
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime for the reactor");
-        runtime.block_on(async {
-            let state = app.state::<ChatState>();
-            let link = app.state::<crate::mesh::MeshLink>();
-            let mut history: Vec<ChatMessage> = state
-                .history
-                .lock()
-                .expect("chat history lock")
-                .iter()
-                .cloned()
-                .collect();
-            history.push(ChatMessage {
-                role: "user".to_string(),
-                content: "A new mesh event just arrived on one of your subscribed topics (see your context). React as appropriate -- observe, act with your mesh tools if the event calls for it, or note it briefly. Do NOT resubscribe to topics you are already subscribed to.".to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-            });
-            let memory_text = if *state.memory.lock().expect("chat policy lock") {
-                let query = last_user_message(&history);
-                recall_memory(&link, &query, memory_realm(&state)).await
-            } else {
-                String::new()
-            };
-            let result = run_turn(&app, &link, history, memory_text).await;
-            let _ = app.emit("chat-done", ());
-            record_answer(&app, &state, result);
-            *state.in_flight.lock().expect("chat inflight lock") = false;
-        });
+        runtime.block_on(reactor_turn(app));
     });
+}
+
+/// reactor_turn is one reaction to a fresh mesh event: the conversation
+/// so far plus the event prompt, memory recall when it is on, a grounded
+/// turn, and the answer recorded back into the history.
+async fn reactor_turn(app: tauri::AppHandle) {
+    let state = app.state::<ChatState>();
+    let link = app.state::<crate::mesh::MeshLink>();
+    let mut history = history_snapshot(&state);
+    history.push(ChatMessage {
+        role: "user".to_string(),
+        content: "A new mesh event just arrived on one of your subscribed topics (see your context). React as appropriate -- observe, act with your mesh tools if the event calls for it, or note it briefly. Do NOT resubscribe to topics you are already subscribed to.".to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+    });
+    let memory_text = if *state.memory.lock().expect("chat policy lock") {
+        let query = last_user_message(&history);
+        recall_memory(&link, &query, memory_realm(&state)).await
+    } else {
+        String::new()
+    };
+    let result = run_turn(&app, &link, history, memory_text).await;
+    let _ = app.emit("chat-done", ());
+    record_answer(&app, &state, result);
+    *state.in_flight.lock().expect("chat inflight lock") = false;
+}
+
+/// deliveries_text renders the recent event deliveries the agent is
+/// grounded in, oldest last, capped at the twenty newest.
+fn deliveries_text(events: &[crate::mesh::MeshEvent]) -> String {
+    if events.is_empty() {
+        return "You have not received any subscribed events yet.".to_string();
+    }
+    let lines: Vec<String> = events
+        .iter()
+        .rev()
+        .take(20)
+        .rev()
+        .map(|e| {
+            format!(
+                "- topic {} from {} (seq {}): {}",
+                e.topic, e.publisher, e.seq, e.payload
+            )
+        })
+        .collect();
+    format!(
+        "Deliveries your subscriptions have received (oldest last):\n{}",
+        lines.join("\n")
+    )
 }
 
 /// ground_messages prepends the system prompt derived from the live
@@ -545,22 +578,7 @@ fn ground_messages(
     } else {
         "not connected".to_string()
     };
-    let events = link.recent_events();
-    let events_text = if events.is_empty() {
-        "You have not received any subscribed events yet.".to_string()
-    } else {
-        let mut lines: Vec<String> = Vec::with_capacity(events.len());
-        for e in events.iter().rev().take(20).rev() {
-            lines.push(format!(
-                "- topic {} from {} (seq {}): {}",
-                e.topic, e.publisher, e.seq, e.payload
-            ));
-        }
-        format!(
-            "Deliveries your subscriptions have received (oldest last):\n{}",
-            lines.join("\n")
-        )
-    };
+    let events_text = deliveries_text(&link.recent_events());
     let memory_block = if memory_text.is_empty() {
         String::new()
     } else {
@@ -620,18 +638,8 @@ async fn run_turn(
             tool_call_id: None,
         });
         for call in &tool_calls {
-            // The gate: write/act tools wait on the operator before
-            // anything reaches the mesh. Reads auto-run.
             let gated = GATED_TOOLS.contains(&call.function.name.as_str());
-            let result: Result<String, String> = if gated {
-                match request_approval(app, call).await {
-                    Some(true) => execute_tool(link, call).await,
-                    Some(false) => Err("denied by the operator".to_string()),
-                    None => Err("approval timed out after 10 minutes".to_string()),
-                }
-            } else {
-                execute_tool(link, call).await
-            };
+            let result = gated_tool(app, link, call).await;
             let content = match result {
                 Ok(ok) => ok,
                 Err(e) => format!("error: {e}"),
@@ -682,75 +690,95 @@ async fn request_approval(app: &tauri::AppHandle, call: &ToolCall) -> Option<boo
     }
 }
 
+/// parse_tool_args parses one tool call's JSON arguments.
+fn parse_tool_args(arguments: &str) -> Result<serde_json::Value, String> {
+    serde_json::from_str(arguments).map_err(|e| format!("bad arguments: {e}"))
+}
+
+/// tool_command maps a tool call's name and JSON arguments onto the mesh
+/// command it runs. Argument validation fails the tool, never the turn.
+fn tool_command(name: &str, arguments: &str) -> Result<crate::mesh::MeshCommand, String> {
+    match name {
+        "mesh_call" => {
+            let args = parse_tool_args(arguments)?;
+            let procedure = args["procedure"].as_str().unwrap_or("").to_string();
+            let args_json = args["args_json"].as_str().unwrap_or("").to_string();
+            if procedure.is_empty() {
+                return Err("mesh_call requires a procedure".to_string());
+            }
+            Ok(crate::mesh::MeshCommand::Call {
+                procedure,
+                args_json,
+                realm: [0u8; 32],
+            })
+        }
+        "mesh_publish" => {
+            let args = parse_tool_args(arguments)?;
+            let topic = args["topic"].as_str().unwrap_or("").to_string();
+            let payload_json = args["payload_json"].as_str().unwrap_or("").to_string();
+            Ok(crate::mesh::MeshCommand::Publish {
+                topic,
+                payload_json,
+            })
+        }
+        "mesh_subscribe" => {
+            let args = parse_tool_args(arguments)?;
+            let topic = args["topic"].as_str().unwrap_or("").to_string();
+            Ok(crate::mesh::MeshCommand::Subscribe { topic })
+        }
+        "mesh_unsubscribe" => {
+            let args = parse_tool_args(arguments)?;
+            let topic = args["topic"].as_str().unwrap_or("").to_string();
+            Ok(crate::mesh::MeshCommand::Unsubscribe { topic })
+        }
+        "content_get" => {
+            let args = parse_tool_args(arguments)?;
+            let mcid_hex = args["mcid"].as_str().unwrap_or("").to_string();
+            if mcid_hex.is_empty() {
+                return Err("content_get requires an mcid".to_string());
+            }
+            Ok(crate::mesh::MeshCommand::ContentGet { mcid_hex })
+        }
+        "content_put" => {
+            let args = parse_tool_args(arguments)?;
+            let data = args["data"].as_str().unwrap_or("").to_string();
+            let name = args["name"].as_str().unwrap_or("").to_string();
+            use base64::Engine;
+            let data_b64 = base64::engine::general_purpose::STANDARD.encode(data.as_bytes());
+            Ok(crate::mesh::MeshCommand::ContentPut { data_b64, name })
+        }
+        other => Err(format!("unknown tool {other}")),
+    }
+}
+
+/// gated_tool runs one tool call through the operator gate: write/act
+/// tools wait on the operator before anything reaches the mesh, reads
+/// auto-run.
+async fn gated_tool(
+    app: &tauri::AppHandle,
+    link: &crate::mesh::MeshLink,
+    call: &ToolCall,
+) -> Result<String, String> {
+    if !GATED_TOOLS.contains(&call.function.name.as_str()) {
+        return execute_tool(link, call).await;
+    }
+    match request_approval(app, call).await {
+        Some(true) => execute_tool(link, call).await,
+        Some(false) => Err("denied by the operator".to_string()),
+        None => Err("approval timed out after 10 minutes".to_string()),
+    }
+}
+
 /// execute_tool runs one tool call against the live mesh link.
 async fn execute_tool(link: &crate::mesh::MeshLink, call: &ToolCall) -> Result<String, String> {
     match call.function.name.as_str() {
         "mesh_status" => {
             serde_json::to_string(&link.snapshot()).map_err(|e| format!("encode status: {e}"))
         }
-        "mesh_call" => {
-            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                .map_err(|e| format!("bad arguments: {e}"))?;
-            let procedure = args["procedure"].as_str().unwrap_or("").to_string();
-            let args_json = args["args_json"].as_str().unwrap_or("").to_string();
-            if procedure.is_empty() {
-                Err("mesh_call requires a procedure".to_string())
-            } else {
-                link.request(crate::mesh::MeshCommand::Call {
-                    procedure,
-                    args_json,
-                    realm: [0u8; 32],
-                })
-                .await
-            }
+        name => {
+            let command = tool_command(name, &call.function.arguments)?;
+            link.request(command).await
         }
-        "mesh_publish" => {
-            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                .map_err(|e| format!("bad arguments: {e}"))?;
-            let topic = args["topic"].as_str().unwrap_or("").to_string();
-            let payload_json = args["payload_json"].as_str().unwrap_or("").to_string();
-            link.request(crate::mesh::MeshCommand::Publish {
-                topic,
-                payload_json,
-            })
-            .await
-        }
-        "mesh_subscribe" => {
-            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                .map_err(|e| format!("bad arguments: {e}"))?;
-            let topic = args["topic"].as_str().unwrap_or("").to_string();
-            link.request(crate::mesh::MeshCommand::Subscribe { topic })
-                .await
-        }
-        "mesh_unsubscribe" => {
-            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                .map_err(|e| format!("bad arguments: {e}"))?;
-            let topic = args["topic"].as_str().unwrap_or("").to_string();
-            link.request(crate::mesh::MeshCommand::Unsubscribe { topic })
-                .await
-        }
-        "content_get" => {
-            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                .map_err(|e| format!("bad arguments: {e}"))?;
-            let mcid_hex = args["mcid"].as_str().unwrap_or("").to_string();
-            if mcid_hex.is_empty() {
-                Err("content_get requires an mcid".to_string())
-            } else {
-                link.request(crate::mesh::MeshCommand::ContentGet { mcid_hex })
-                    .await
-            }
-        }
-        "content_put" => {
-            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                .map_err(|e| format!("bad arguments: {e}"))?;
-            let data = args["data"].as_str().unwrap_or("").to_string();
-            let name = args["name"].as_str().unwrap_or("").to_string();
-            use base64::Engine;
-            let data_b64 = base64::engine::general_purpose::STANDARD.encode(data.as_bytes());
-            link.request(crate::mesh::MeshCommand::ContentPut { data_b64, name })
-                .await
-        }
-        other => Err(format!("unknown tool {other}")),
     }
 }
 
@@ -797,50 +825,82 @@ async fn stream_chat(
         }
         let chunk = chunk?;
         buf.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(pos) = buf.find('\n') {
-            let line = buf[..pos].trim().to_string();
-            buf.drain(..=pos);
-            if let Some(data) = line.strip_prefix("data:") {
-                let data = data.trim();
-                if data == "[DONE]" {
-                    break;
-                }
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                    let choice = &v["choices"][0];
-                    if let Some(delta) = choice["delta"]["content"].as_str() {
-                        text.push_str(delta);
-                        let _ = app.emit("chat-delta", delta);
-                    }
-                    if let Some(calls) = choice["delta"]["tool_calls"].as_array() {
-                        for call in calls {
-                            let index = call["index"].as_u64().unwrap_or(0) as usize;
-                            while tool_calls.len() <= index {
-                                tool_calls.push(ToolCall {
-                                    id: String::new(),
-                                    kind: "function".to_string(),
-                                    function: ToolCallFunction {
-                                        name: String::new(),
-                                        arguments: String::new(),
-                                    },
-                                });
-                            }
-                            let tc = &mut tool_calls[index];
-                            if let Some(id) = call["id"].as_str() {
-                                tc.id = id.to_string();
-                            }
-                            if let Some(name) = call["function"]["name"].as_str() {
-                                tc.function.name.push_str(name);
-                            }
-                            if let Some(args) = call["function"]["arguments"].as_str() {
-                                tc.function.arguments.push_str(args);
-                            }
-                        }
-                    }
-                }
-            }
+        if drain_sse_lines(app, &mut buf, &mut text, &mut tool_calls) {
+            // `[DONE]`: stop consuming this buffer, exactly as the old
+            // inner-loop break did -- whatever follows it in `buf` is
+            // still carried over and parsed with the next chunk.
+            continue;
         }
     }
     Ok((text, tool_calls))
+}
+
+/// drain_sse_lines folds every complete line already in `buf` into the
+/// running text and tool-call accumulators, and reports whether a
+/// `[DONE]` line ended the stream.
+fn drain_sse_lines(
+    app: &tauri::AppHandle,
+    buf: &mut String,
+    text: &mut String,
+    tool_calls: &mut Vec<ToolCall>,
+) -> bool {
+    while let Some(pos) = buf.find('\n') {
+        let line = buf[..pos].trim().to_string();
+        buf.drain(..=pos);
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data == "[DONE]" {
+            return true;
+        }
+        collect_sse_delta(app, data, text, tool_calls);
+    }
+    false
+}
+
+/// collect_sse_delta folds one SSE data payload into the text and the
+/// tool-call accumulators. A payload that is not JSON is ignored.
+fn collect_sse_delta(
+    app: &tauri::AppHandle,
+    data: &str,
+    text: &mut String,
+    tool_calls: &mut Vec<ToolCall>,
+) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+        return;
+    };
+    let choice = &v["choices"][0];
+    if let Some(delta) = choice["delta"]["content"].as_str() {
+        text.push_str(delta);
+        let _ = app.emit("chat-delta", delta);
+    }
+    let Some(calls) = choice["delta"]["tool_calls"].as_array() else {
+        return;
+    };
+    for call in calls {
+        let index = call["index"].as_u64().unwrap_or(0) as usize;
+        while tool_calls.len() <= index {
+            tool_calls.push(ToolCall {
+                id: String::new(),
+                kind: "function".to_string(),
+                function: ToolCallFunction {
+                    name: String::new(),
+                    arguments: String::new(),
+                },
+            });
+        }
+        let tc = &mut tool_calls[index];
+        if let Some(id) = call["id"].as_str() {
+            tc.id = id.to_string();
+        }
+        if let Some(name) = call["function"]["name"].as_str() {
+            tc.function.name.push_str(name);
+        }
+        if let Some(args) = call["function"]["arguments"].as_str() {
+            tc.function.arguments.push_str(args);
+        }
+    }
 }
 
 /// TOOLS is the agent's native toolbox: mesh operations executed by

@@ -1,0 +1,5 @@
+# The house structural floor (macula-codebase-checks#9), measured by the
+# denies in Cargo.toml's [lints.clippy] and same as src-tauri's.
+excessive-nesting-threshold = 3
+cognitive-complexity-threshold = 15
+too-many-lines-threshold = 60

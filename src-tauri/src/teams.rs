@@ -46,18 +46,17 @@ pub fn board(joined: &[JoinedRoom], help: &[MeshEvent]) -> TeamBoard {
 fn open_pairs(joined: &[JoinedRoom], claim: &str, release: &str) -> Vec<TeamItem> {
     let mut released = Vec::new();
     let mut candidates: Vec<(TeamItem, String)> = Vec::new();
-    for room in joined {
-        for message in &room.messages {
-            let Some(envelope) = envelope(message) else {
-                continue;
-            };
-            if envelope.kind == release {
-                released.extend(envelope.in_reply_to.clone());
-            }
-            if envelope.kind == claim {
-                let item = envelope.item(message);
-                candidates.push((item, envelope.message_id));
-            }
+    let messages = joined.iter().flat_map(|room| room.messages.iter());
+    for message in messages {
+        let Some(envelope) = envelope(message) else {
+            continue;
+        };
+        if envelope.kind == release {
+            released.extend(envelope.in_reply_to.clone());
+        }
+        if envelope.kind == claim {
+            let item = envelope.item(message);
+            candidates.push((item, envelope.message_id));
         }
     }
     candidates

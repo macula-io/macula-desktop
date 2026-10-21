@@ -57,6 +57,15 @@ pub struct AppsConfig {
     pub mesh: Vec<MeshApp>,
 }
 
+/// home_config_dir is `$HOME/.config`, the fallback when
+/// `XDG_CONFIG_HOME` is unset or empty.
+fn home_config_dir() -> Option<std::ffi::OsString> {
+    let home = std::env::var_os("HOME")?;
+    let mut p = PathBuf::from(&home);
+    p.push(".config");
+    Some(p.into_os_string())
+}
+
 /// config_path is where applications live:
 /// ~/.config/macula-desktop/apps.json on Linux/macOS,
 /// %LOCALAPPDATA%\macula-desktop\apps.json on Windows.
@@ -66,13 +75,7 @@ fn config_path() -> Option<PathBuf> {
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
             .filter(|v| !v.is_empty())
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| {
-                    let mut p = PathBuf::from(&h);
-                    p.push(".config");
-                    p.into_os_string()
-                })
-            })
+            .or_else(home_config_dir)
     }?;
     let mut path = PathBuf::from(dir);
     path.push("macula-desktop");
