@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 760" role="img" aria-label="macula-desktop components">
+<title>macula-desktop components</title>
+<style>
+.t-name { font-family: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; font-size: 15px; font-weight: 700; }
+.t-desc { font-family: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; font-size: 12.5px; }
+.t-rel { font-family: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; font-size: 11.5px; paint-order: stroke; stroke-width: 4px; stroke-linejoin: round; }
+.t-code { font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
+.t-type { font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+.t-bound { font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; }
+.t-leg { font-family: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; font-size: 12px; }
+.edge { fill: none; stroke-width: 1.25; }
+.edge-later { fill: none; stroke-width: 1.25; stroke-dasharray: 5 4; }
+.bg { fill: #FFFFFF; }
+.b-sys { fill: #F5E9CC; stroke: #A56F0A; stroke-width: 2; }
+.b-per { fill: #E3EBF2; stroke: #3B5B7A; stroke-width: 1.25; }
+.b-mac { fill: #E6E4EE; stroke: #5E5A78; stroke-width: 1.25; }
+.b-ext { fill: #ECEFED; stroke: #8A9791; stroke-width: 1.25; }
+.b-cmp { fill: #FFFFFF; stroke: #8A9791; stroke-width: 1.25; }
+.b-later { fill: none; stroke: #8A9791; stroke-width: 1.25; stroke-dasharray: 5 4; }
+.bound { fill: none; stroke: #B3BDB8; stroke-width: 1; }
+.head { fill: #3B5B7A; }
+.t-name, .t-code { fill: #16201D; }
+.t-type, .t-bound, .t-leg { fill: #66736E; }
+.t-desc { fill: #34413C; }
+.t-rel { fill: #66736E; stroke: #FFFFFF; }
+.edge, .edge-later { stroke: #8A9791; }
+.arrowhead { fill: #8A9791; }
+@media (prefers-color-scheme: dark) {
+.bg { fill: #171F1C; }
+.b-sys { fill: #3A2E13; stroke: #E3AA3C; }
+.b-per { fill: #1D2A36; stroke: #8EB4D8; }
+.b-mac { fill: #26243A; stroke: #A9A4C8; }
+.b-ext { fill: #1C2421; stroke: #7D8B85; }
+.b-cmp { fill: #171F1C; stroke: #7D8B85; }
+.b-later { stroke: #7D8B85; }
+.bound { stroke: #4A5752; }
+.head { fill: #8EB4D8; }
+.t-name, .t-code { fill: #E6ECE9; }
+.t-type, .t-bound, .t-leg { fill: #93A09A; }
+.t-desc { fill: #C3CDC8; }
+.t-rel { fill: #93A09A; stroke: #171F1C; }
+.edge, .edge-later { stroke: #7D8B85; }
+.arrowhead { fill: #7D8B85; }
+}
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0 0L10 5L0 10z"/></marker></defs>
+<rect class="bg" x="0" y="0" width="1240" height="760"/>
+<rect class="bound" x="270" y="40" width="700" height="620" rx="12"/>
+<text class="t-bound" x="286" y="62">macula-desktop executable [Tauri 2: src-tauri/, dist/]</text>
+<rect class="b-cmp" x="286" y="70" width="309" height="120" rx="10"/>
+<text class="t-code" x="302" y="98">dist/</text>
+<text class="t-type" x="302" y="116">[webview: index.html, app.js]</text>
+<text class="t-desc" x="302" y="140">The five tabs and the chat. Every</text>
+<text class="t-desc" x="302" y="156">fact on screen arrives through</text>
+<text class="t-desc" x="302" y="172">invoke; it never touches the network.</text>
+<rect class="b-cmp" x="645" y="70" width="309" height="120" rx="10"/>
+<text class="t-code" x="661" y="98">lib.rs run()</text>
+<text class="t-type" x="661" y="116">[Tauri Builder, invoke_handler]</text>
+<text class="t-desc" x="661" y="140">Registers 21 commands; manages</text>
+<text class="t-desc" x="661" y="156">MeshLink and ChatState; installs</text>
+<text class="t-desc" x="661" y="172">the tray at setup.</text>
+<rect class="b-cmp" x="286" y="220" width="309" height="150" rx="10"/>
+<text class="t-code" x="302" y="248">chat.rs</text>
+<text class="t-type" x="302" y="266">[personal agent loop]</text>
+<text class="t-desc" x="302" y="290">Streams the model's answer as</text>
+<text class="t-desc" x="302" y="306">events. Its tool loop holds</text>
+<text class="t-desc" x="302" y="322">mesh_call, mesh_publish and</text>
+<text class="t-desc" x="302" y="338">content_put for the operator's yes;</text>
+<text class="t-desc" x="302" y="354">recall and remember via mcl-rag.</text>
+<rect class="b-sys" x="645" y="220" width="309" height="150" rx="10"/>
+<text class="t-code" x="661" y="248">mesh.rs MeshLink</text>
+<text class="t-type" x="661" y="266">[thread, own tokio runtime]</text>
+<text class="t-desc" x="661" y="290">One Pool for the app's lifetime:</text>
+<text class="t-desc" x="661" y="306">fleet seeds, node.key, redial.</text>
+<text class="t-desc" x="661" y="322">agent.hello every 60 s, roster,</text>
+<text class="t-desc" x="661" y="338">lobby and joined rooms; publish,</text>
+<text class="t-desc" x="661" y="354">call, content; events to the window.</text>
+<rect class="b-cmp" x="286" y="400" width="151" height="110" rx="10"/>
+<text class="t-code" x="302" y="428">apps.rs</text>
+<text class="t-type" x="302" y="446">[apps.json]</text>
+<text class="t-desc" x="302" y="470">Local and mesh</text>
+<text class="t-desc" x="302" y="486">apps; http(s) only</text>
+<text class="t-desc" x="302" y="502">to the browser</text>
+<rect class="b-cmp" x="444" y="400" width="151" height="110" rx="10"/>
+<text class="t-code" x="460" y="428">tray.rs</text>
+<text class="t-type" x="460" y="446">[tray icon]</text>
+<text class="t-desc" x="460" y="470">Close hides the</text>
+<text class="t-desc" x="460" y="486">window; Show or</text>
+<text class="t-desc" x="460" y="502">Quit from the tray</text>
+<rect class="b-cmp" x="645" y="400" width="151" height="110" rx="10"/>
+<text class="t-code" x="661" y="428">teams.rs</text>
+<text class="t-type" x="661" y="446">[pure derivation]</text>
+<text class="t-desc" x="661" y="470">The Teams board</text>
+<text class="t-desc" x="661" y="486">from joined rooms</text>
+<text class="t-desc" x="661" y="502">and lobby help</text>
+<rect class="b-cmp" x="803" y="400" width="151" height="110" rx="10"/>
+<text class="t-code" x="819" y="428">io_macula.rs</text>
+<text class="t-type" x="819" y="446">[constants]</text>
+<text class="t-desc" x="819" y="470">Six seeds pinned</text>
+<text class="t-desc" x="819" y="486">by node_id; the</text>
+<text class="t-desc" x="819" y="502">realm public key</text>
+<rect class="b-cmp" x="286" y="540" width="309" height="100" rx="10"/>
+<text class="t-name" x="302" y="568">Config directory</text>
+<text class="t-type" x="302" y="586">[~/.config/macula-desktop]</text>
+<text class="t-desc" x="302" y="610">node.key, settings.json, chat.jsonl,</text>
+<text class="t-desc" x="302" y="626">apps.json (%LOCALAPPDATA% on Windows)</text>
+<rect class="b-mac" x="645" y="540" width="309" height="100" rx="10"/>
+<text class="t-name" x="661" y="568">macula-rust 0.11</text>
+<text class="t-type" x="661" y="586">[Macula SDK crate, crates.io]</text>
+<text class="t-desc" x="661" y="610">pool, node_key, station_link, cbor,</text>
+<text class="t-desc" x="661" y="626">petname: the wire 1.0 node</text>
+<rect class="b-ext" x="20" y="220" width="200" height="120" rx="10"/>
+<text class="t-name" x="36" y="248">LLM endpoint</text>
+<text class="t-type" x="36" y="266">[External]</text>
+<text class="t-desc" x="36" y="290">OpenAI-compatible;</text>
+<text class="t-desc" x="36" y="306">DeepSeek by default</text>
+<rect class="b-ext" x="20" y="400" width="200" height="110" rx="10"/>
+<text class="t-name" x="36" y="428">System browser</text>
+<text class="t-type" x="36" y="446">[External]</text>
+<text class="t-desc" x="36" y="470">Opens a declared</text>
+<text class="t-desc" x="36" y="486">app's URL</text>
+<rect class="b-mac" x="1020" y="540" width="200" height="100" rx="10"/>
+<text class="t-name" x="1036" y="568">Fleet stations</text>
+<text class="t-type" x="1036" y="586">[Macula infrastructure]</text>
+<text class="t-desc" x="1036" y="610">Six, pinned by</text>
+<text class="t-desc" x="1036" y="626">node_id</text>
+<path class="edge" d="M595 130H645" marker-end="url(#a)"/>
+<text class="t-rel" x="620" y="122" text-anchor="middle">invoke</text>
+<path class="edge" d="M880 190V220" marker-end="url(#a)"/>
+<text class="t-rel" x="888" y="210">commands</text>
+<path class="edge" d="M690 190V205H440V220" marker-end="url(#a)"/>
+<text class="t-rel" x="565" y="200" text-anchor="middle">commands</text>
+<path class="edge" d="M595 300H645" marker-end="url(#a)"/>
+<text class="t-rel" x="620" y="292" text-anchor="middle">tools</text>
+<path class="edge" d="M720 370V400" marker-end="url(#a)"/>
+<text class="t-rel" x="728" y="390">stores</text>
+<path class="edge" d="M878 370V400" marker-end="url(#a)"/>
+<text class="t-rel" x="886" y="390">seeds, key</text>
+<path class="edge" d="M799 370V540" marker-end="url(#a)"/>
+<path class="edge" d="M440 370V540" marker-end="url(#a)"/>
+<text class="t-rel" x="448" y="528">settings, transcript</text>
+<text class="t-rel" x="807" y="528">Pool</text>
+<path class="edge" d="M286 280H220" marker-end="url(#a)"/>
+<text class="t-rel" x="245" y="270" text-anchor="middle">HTTPS,</text>
+<text class="t-rel" x="245" y="298" text-anchor="middle">SSE</text>
+<path class="edge" d="M286 455H220" marker-end="url(#a)"/>
+<text class="t-rel" x="245" y="445" text-anchor="middle">http(s)</text>
+<text class="t-rel" x="245" y="473" text-anchor="middle">URL</text>
+<path class="edge" d="M954 590H1020" marker-end="url(#a)"/>
+<text class="t-rel" x="987" y="580" text-anchor="middle">QUIC</text>
+<text class="t-rel" x="987" y="608" text-anchor="middle">wire 1.0</text>
+<rect class="b-sys" x="24" y="700" width="22" height="14" rx="3"/>
+<text class="t-leg" x="54" y="712">In scope</text>
+<rect class="b-per" x="110.8" y="700" width="22" height="14" rx="3"/>
+<text class="t-leg" x="140.8" y="712">Person</text>
+<rect class="b-mac" x="184.39999999999998" y="700" width="22" height="14" rx="3"/>
+<text class="t-leg" x="214.39999999999998" y="712">Macula infrastructure</text>
+<rect class="b-ext" x="357.0" y="700" width="22" height="14" rx="3"/>
+<text class="t-leg" x="387.0" y="712">External system</text>
+<rect class="b-cmp" x="490.0" y="700" width="22" height="14" rx="3"/>
+<text class="t-leg" x="520.0" y="712">Container or component</text>
+<rect class="b-later" x="669.2" y="700" width="22" height="14" rx="3"/>
+<text class="t-leg" x="699.2" y="712">Planned, not built</text>
+<rect class="bound" x="822.0" y="700" width="22" height="14" rx="3"/>
+<text class="t-leg" x="852.0" y="712">Boundary</text>
+</svg>

@@ -128,6 +128,11 @@ touches the network; Tauri IPC in between, with each command an
 explicitly registered function. Planned work is tracked in
 [issues labelled `plan`](https://github.com/macula-io/macula-desktop/issues?q=is%3Aissue+is%3Aopen+label%3Aplan).
 
+![macula-desktop system context](assets/c4-context.svg)
+
+The C4 model, context and components with a table per diagram, is in
+[architecture/README.md](architecture/README.md).
+
 ## License
 
 Licensed under either of
